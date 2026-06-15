@@ -579,30 +579,38 @@ function MapSystem:captureBase(base)
         return false
     end
     
+    if not base or not base.instance or not base.instance.Parent then
+        print("[Map] Base not valid")
+        return false
+    end
+    
     print("[Map] === ATTEMPTING CAPTURE ===")
     print("[Map] Target: " .. base.name)
     print("[Map] Owner: " .. tostring(base.owner))
-    print("[Map] Instance: " .. tostring(base.instance))
     
+    -- Fire rocket first (no armyIndex)
     dataRemote:FireServer({
         {
-            armyIndex = 1,
             capturePoint = base.instance
         },
-        "V"
+        "z"
     })
     
+    task.wait(0.1)
+    
+    -- Deploy armies 1-4
     for i = 1, 4 do
         dataRemote:FireServer({
             {
                 armyIndex = i,
                 capturePoint = base.instance
             },
-            "U"
+            "y"
         })
+        task.wait(0.05)
     end
     
-    print("[Map] Capture packet sent for: " .. base.name)
+    print("[Map] Capture packets sent for: " .. base.name)
     return true
 end
 
