@@ -630,33 +630,56 @@ function MapSystem:captureBase(base)
     if not dataRemote then return false end
     if not base or not base.instance or not base.instance.Parent then return false end
     
+    local keys = {"x", "y", "z"}
     local rocketKey = _G.DetectedRocketKey
     local armyKey = _G.DetectedArmyKey
     
-    if not rocketKey or not armyKey then
-        print("[Map] Keys not detected! Deploy rocket + army manually first.")
-        return false
-    end
-    
-    -- Send ROCKET first (no armyIndex)
-    dataRemote:FireServer({
-        {
-            capturePoint = base.instance
-        },
-        rocketKey
-    })
-    task.wait(0.05)
-    
-    -- Send ARMIES 1-4
-    for i = 1, 4 do
+    -- If we have detected keys, use them
+    if rocketKey and armyKey then
         dataRemote:FireServer({
-            {
-                armyIndex = i,
-                capturePoint = base.instance
-            },
-            armyKey
+            {capturePoint = base.instance},
+            rocketKey
         })
         task.wait(0.05)
+        
+        for i = 1, 4 do
+            dataRemote:FireServer({
+                {armyIndex = i, capturePoint = base.instance},
+                armyKey
+            })
+            task.wait(0.05)
+        end
+        return true
+    end
+    
+    -- Brute force: try most common combos first
+    -- Usually rocket=z, army=y or rocket=y, army=x
+    local commonCombos = {
+        {"z", "y"}, {"y", "x"}, {"x", "z"}, {"y", "y"}, {"z", "x"}
+    }
+    
+    print("[Map] Brute forcing keys...")
+    for _, combo in ipairs(commonCombos) do
+        local rKey, aKey = combo[1], combo[2]
+        
+        -- Send rocket
+        dataRemote:FireServer({
+            {capturePoint = base.instance},
+            rKey
+        })
+        task.wait(0.1)
+        
+        -- Send armies
+        for i = 1, 4 do
+            dataRemote:FireServer({
+                {armyIndex = i, capturePoint = base.instance},
+                aKey
+            })
+            task.wait(0.05)
+        end
+        
+        -- Give game time to process before next combo
+        task.wait(0.2)
     end
     
     return true
@@ -696,38 +719,56 @@ function KOTHSystem:getKOTHModels()
     return models
 end
 
-function KOTHSystem:deployToKOTH(kothModel, key)
+function KOTHSystem:deployToKOTH(kothModel)
     if not kothModel or not kothModel.Parent then return false end
     local dataRemote = self:getDataRemote()
     if not dataRemote then return false end
     
+    local keys = {"x", "y", "z"}
     local rocketKey = _G.DetectedRocketKey
-    local armyKey = _G.DetectedArmyKey or key
+    local armyKey = _G.DetectedArmyKey
     
-    if not rocketKey or not armyKey then
-        print("[KOTH] Keys not detected yet!")
-        return false
-    end
-    
-    -- Rocket
-    dataRemote:FireServer({
-        {
-            capturePoint = kothModel
-        },
-        rocketKey
-    })
-    task.wait(0.05)
-    
-    -- Armies 1-4
-    for i = 1, 4 do
+    -- Use detected keys if available
+    if rocketKey and armyKey then
         dataRemote:FireServer({
-            {
-                armyIndex = i,
-                capturePoint = kothModel
-            },
-            armyKey
+            {capturePoint = kothModel},
+            rocketKey
         })
         task.wait(0.05)
+        
+        for i = 1, 4 do
+            dataRemote:FireServer({
+                {armyIndex = i, capturePoint = kothModel},
+                armyKey
+            })
+            task.wait(0.05)
+        end
+        return true
+    end
+    
+    -- Brute force common combos
+    local commonCombos = {
+        {"z", "y"}, {"y", "x"}, {"x", "z"}, {"y", "y"}, {"z", "x"}
+    }
+    
+    for _, combo in ipairs(commonCombos) do
+        local rKey, aKey = combo[1], combo[2]
+        
+        dataRemote:FireServer({
+            {capturePoint = kothModel},
+            rKey
+        })
+        task.wait(0.1)
+        
+        for i = 1, 4 do
+            dataRemote:FireServer({
+                {armyIndex = i, capturePoint = kothModel},
+                aKey
+            })
+            task.wait(0.05)
+        end
+        
+        task.wait(0.2)
     end
     
     return true
@@ -736,10 +777,9 @@ end
 function KOTHSystem:AutoKOTHLoop()
     while State.running do
         if State.autoKOTH then
-            local key = _G.DetectedPacketKey or "x"
             local kothModels = self:getKOTHModels()
             for _, model in ipairs(kothModels) do
-                self:deployToKOTH(model.instance, key)
+                self:deployToKOTH(model.instance)
             end
         end
         task.wait(15)
