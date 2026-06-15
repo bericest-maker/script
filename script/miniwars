@@ -286,8 +286,19 @@ end
 local BlackMarketSystem = {}
 
 function BlackMarketSystem:IsActive()
+    -- Check UI first (your path)
+    local grid = ShopData:GetBlackMarketGrid()
+    if grid and grid.Parent then
+        local ui = grid.Parent
+        if ui:IsA("GuiObject") and ui.Visible then
+            return true
+        end
+    end
+    
+    -- Fallback to workspace part
     local part = Utility:SafeFindFirstChild(workspace, "BlackMarket", "Main", "Other", "Part")
     if part and part:IsA("BasePart") then return part.Transparency ~= 1 end
+    
     return false
 end
 
@@ -354,7 +365,16 @@ function ShopData:GetShopGrid()
 end
 
 function ShopData:GetBlackMarketGrid()
-    return Utility:SafeFindFirstChild(player, "PlayerGui", "MainUI", "Fullscreen", "BlackMarketUI", "ItemsGrid")
+    -- Named path first
+    local grid = Utility:SafeFindFirstChild(player, "PlayerGui", "MainUI", "Fullscreen", "BlackMarketUI", "ItemsGrid")
+    if grid then return grid end
+    
+    -- Your index path fallback
+    local success, result = pcall(function()
+        return game:GetChildren()[17]:GetChildren()[1]:GetChildren()[2]:GetChildren()[2]:GetChildren()[2]:GetChildren()[16]:GetChildren()[3]
+    end)
+    if success and result and result:IsA("GuiObject") then return result end
+    return nil
 end
 
 function ShopData:RefreshShop()
@@ -385,6 +405,7 @@ end
 
 function ShopData:GetCurrentItems()
     if State.currentTab == "Shop" then return State.shopItems end
+    if State.currentTab == "BlackMarket" then return State.blackMarketItems end
     return State.blackMarketItems
 end
 
@@ -402,24 +423,38 @@ local PurchaseSystem = {}
 
 function PurchaseSystem:FindLiveBuyButton(itemName)
     local grid = nil
-    if State.currentTab == "BlackMarket" then
+    
+    -- Try Black Market first if active
+    BlackMarketSystem:RefreshStatus()
+    if State.isBlackMarketActive then
         grid = ShopData:GetBlackMarketGrid()
-    else
-        grid = ShopData:GetShopGrid()
+        if grid then
+            for _, child in ipairs(grid:GetChildren()) do
+                if child:IsA("Frame") and child.Name ~= "PadderTemplate" and child.Name ~= "Template" and child.Name ~= "UIGridLayout" then
+                    local nameLabel = child:FindFirstChild("ItemName")
+                    if nameLabel and nameLabel:IsA("TextLabel") and nameLabel.Text == itemName then
+                        local buyBtn = child:FindFirstChild("Buy")
+                        if buyBtn and (buyBtn:IsA("TextButton") or buyBtn:IsA("ImageButton")) then
+                            return buyBtn
+                        end
+                    end
+                end
+            end
+        end
     end
     
-    if not grid then
-        print("[AutoBuy] Grid not found for: " .. itemName)
-        return nil
-    end
+       -- Fallback to Shop
+    grid = ShopData:GetShopGrid()
     
-    for _, child in ipairs(grid:GetChildren()) do
-        if child:IsA("Frame") and child.Name ~= "PadderTemplate" and child.Name ~= "Template" and child.Name ~= "UIGridLayout" then
-            local nameLabel = child:FindFirstChild("ItemName")
-            if nameLabel and nameLabel:IsA("TextLabel") and nameLabel.Text == itemName then
-                local buyBtn = child:FindFirstChild("Buy")
-                if buyBtn and (buyBtn:IsA("TextButton") or buyBtn:IsA("ImageButton")) then
-                    return buyBtn
+    if grid then
+        for _, child in ipairs(grid:GetChildren()) do
+            if child:IsA("Frame") and child.Name ~= "PadderTemplate" and child.Name ~= "Template" and child.Name ~= "UIGridLayout" then
+                local nameLabel = child:FindFirstChild("ItemName")
+                if nameLabel and nameLabel:IsA("TextLabel") and nameLabel.Text == itemName then
+                    local buyBtn = child:FindFirstChild("Buy")
+                    if buyBtn and (buyBtn:IsA("TextButton") or buyBtn:IsA("ImageButton")) then
+                        return buyBtn
+                    end
                 end
             end
         end
@@ -502,17 +537,35 @@ end
 
 function PurchaseSystem:AutoBuy()
     if not State.autoBuy then return end
-    local items = ShopData:GetCurrentItems()
+    
+    local items = {}
+    
+    -- Black Market first if active
+    BlackMarketSystem:RefreshStatus()
+    if State.isBlackMarketActive then
+        ShopData:RefreshBlackMarket()
+        for _, item in ipairs(State.blackMarketItems) do
+            if State.autoBuySelections[item.name] and item.hasStock then
+                table.insert(items, item)
+            end
+        end
+    end
+    
+    -- Normal shop
+    ShopData:RefreshShop()
+    for _, item in ipairs(State.shopItems) do
+        if State.autoBuySelections[item.name] and item.hasStock then
+            table.insert(items, item)
+        end
+    end
 
     print("[AutoBuy] Starting. Items: " .. #items)
 
     for _, item in ipairs(items) do
-        if State.autoBuySelections[item.name] and item.hasStock then
-            print("[AutoBuy] Trying: " .. item.name)
-            local bought = self:BuyItem(item.name)
-            if bought then
-                task.wait(CONFIG.BuyCooldown)
-            end
+        print("[AutoBuy] Trying: " .. item.name)
+        local bought = self:BuyItem(item.name)
+        if bought then
+            task.wait(CONFIG.BuyCooldown)
         end
     end
 end
@@ -861,6 +914,8 @@ function UI:Build()
     if shopTab then shopTab.Parent = tabContainer end
     local mapTab = self:Create("TextButton", {Name = "MapTab", Size = UDim2.new(0.25, 0, 1, 0), Position = UDim2.new(0.25, 0, 0, 0), BackgroundColor3 = Color3.fromRGB(45, 45, 55), Text = "Base Map", TextColor3 = Color3.fromRGB(220, 220, 220), TextSize = 14, Font = Enum.Font.GothamSemibold})
     if mapTab then mapTab.Parent = tabContainer end
+    local bmTab = self:Create("TextButton", {Name = "BlackMarketTab", Size = UDim2.new(0.25, 0, 1, 0), Position = UDim2.new(0.50, 0, 0, 0), BackgroundColor3 = Color3.fromRGB(45, 45, 55), Text = "Black Market", TextColor3 = Color3.fromRGB(220, 220, 220), TextSize = 14, Font = Enum.Font.GothamSemibold})
+    if bmTab then bmTab.Parent = tabContainer end
     local searchBox = self:Create("TextBox", {Name = "SearchBox", Size = UDim2.new(0.35, -10, 0.8, 0), Position = UDim2.new(0.55, 5, 0.1, 0), BackgroundColor3 = Color3.fromRGB(50, 50, 60), Text = "", PlaceholderText = "Search items...", TextColor3 = Color3.fromRGB(220, 220, 220), PlaceholderColor3 = Color3.fromRGB(150, 150, 150), TextSize = 12, Font = Enum.Font.Gotham, ClearTextOnFocus = false})
     if searchBox then
         searchBox.Parent = tabContainer
@@ -1156,7 +1211,7 @@ function UI:Build()
     end
     
     State.uiElements = {
-        gui = gui, mainFrame = mainFrame, shopTab = shopTab, mapTab = mapTab,
+        gui = gui, mainFrame = mainFrame, shopTab = shopTab, mapTab = mapTab, bmTab = bmTab,
         searchBox = searchBox, refreshToggle = refreshToggle, buyToggle = buyToggle,
         collectToggle = collectToggle, saveBtn = saveBtn, loadBtn = loadBtn,
         listContainer = listContainer, mapContainer = mapContainer,
@@ -1367,8 +1422,9 @@ function UI:UpdateMap(bases)
 end
 
 function UI:UpdateTabColors()
-    if not State.uiElements.shopTab or not State.uiElements.mapTab then return end
+    if not State.uiElements.shopTab or not State.uiElements.mapTab or not State.uiElements.bmTab then return end
     State.uiElements.shopTab.BackgroundColor3 = State.currentTab == "Shop" and Color3.fromRGB(60, 60, 80) or Color3.fromRGB(45, 45, 55)
+    State.uiElements.bmTab.BackgroundColor3 = State.currentTab == "BlackMarket" and Color3.fromRGB(60, 60, 80) or Color3.fromRGB(45, 45, 55)
     State.uiElements.mapTab.BackgroundColor3 = State.currentTab == "Map" and Color3.fromRGB(60, 60, 80) or Color3.fromRGB(45, 45, 55)
 end
 
@@ -1450,6 +1506,36 @@ function UI:ShowMap()
     UI:UpdateMap(bases)
 end
 
+function UI:ShowBlackMarket()
+    if State.uiElements.listContainer then
+        State.uiElements.listContainer.Visible = true
+    end
+    if State.uiElements.mapContainer then
+        State.uiElements.mapContainer.Visible = false
+    end
+    if State.uiElements.searchBox then
+        State.uiElements.searchBox.Visible = true
+    end
+    if State.uiElements.mapLegend then
+        State.uiElements.mapLegend.Visible = false
+    end
+    if State.uiElements.mapZoomIn then
+        State.uiElements.mapZoomIn.Visible = false
+    end
+    if State.uiElements.mapZoomOut then
+        State.uiElements.mapZoomOut.Visible = false
+    end
+    if State.uiElements.mapZoomLabel then
+        State.uiElements.mapZoomLabel.Visible = false
+    end
+    if State.uiElements.mapResetBtn then
+        State.uiElements.mapResetBtn.Visible = false
+    end
+    if State.uiElements.kothPanel then
+        State.uiElements.kothPanel.Visible = false
+    end
+end
+
 function UI:Destroy()
     if State.uiElements and State.uiElements.gui then
         State.uiElements.gui:Destroy()
@@ -1492,6 +1578,32 @@ function EventHandlers:Setup()
             UI:ShowMap()
         end))
     end
+    if elems.bmTab then
+    table.insert(State.connections, elems.bmTab.MouseButton1Click:Connect(function()
+        State.currentTab = "BlackMarket"
+        UI:UpdateTabColors()
+        UI:ShowBlackMarket()
+        BlackMarketSystem:RefreshStatus()
+        if State.isBlackMarketActive then
+            ShopData:RefreshBlackMarket()
+            local filtered = ShopData:FilterItems(State.blackMarketItems, State.searchQuery)
+            UI:UpdateList(filtered)
+        else
+            UI:ClearItems()
+            local msg = UI:Create("TextLabel", {
+                Size = UDim2.new(1, -20, 0, 30),
+                BackgroundTransparency = 1,
+                Text = "Black Market is currently inactive",
+                TextColor3 = Color3.fromRGB(200, 80, 80),
+                TextSize = 14,
+                Font = Enum.Font.GothamBold,
+            })
+            if msg then
+                msg.Parent = State.uiElements.listContainer
+            end
+        end
+    end))
+end
     if elems.searchBox then
         table.insert(State.connections, elems.searchBox:GetPropertyChangedSignal("Text"):Connect(function()
             State.searchQuery = elems.searchBox.Text
@@ -1631,6 +1743,26 @@ function EventHandlers:RefreshAndUpdate()
         ShopData:RefreshShop()
         local filtered = ShopData:FilterItems(State.shopItems, State.searchQuery)
         UI:UpdateList(filtered)
+    elseif State.currentTab == "BlackMarket" then
+        BlackMarketSystem:RefreshStatus()
+        if State.isBlackMarketActive then
+            ShopData:RefreshBlackMarket()
+            local filtered = ShopData:FilterItems(State.blackMarketItems, State.searchQuery)
+            UI:UpdateList(filtered)
+        else
+            UI:ClearItems()
+            local msg = UI:Create("TextLabel", {
+                Size = UDim2.new(1, -20, 0, 30),
+                BackgroundTransparency = 1,
+                Text = "Black Market is currently inactive",
+                TextColor3 = Color3.fromRGB(200, 80, 80),
+                TextSize = 14,
+                Font = Enum.Font.GothamBold,
+            })
+            if msg then
+                msg.Parent = State.uiElements.listContainer
+            end
+        end
     end
 end
 
@@ -1640,8 +1772,19 @@ local MainLoop = {}
 function MainLoop:StartRefreshLoop()
     local thread = task.spawn(function()
         while State.running do
-            if State.autoRefresh and State.currentTab == "Shop" then
-                EventHandlers:RefreshAndUpdate()
+            -- Always check BM status
+            BlackMarketSystem:RefreshStatus()
+            
+            if State.autoRefresh then
+                if State.currentTab == "Shop" then
+                    EventHandlers:RefreshAndUpdate()
+                elseif State.currentTab == "BlackMarket" then
+                    if State.isBlackMarketActive then
+                        ShopData:RefreshBlackMarket()
+                        local filtered = ShopData:FilterItems(State.blackMarketItems, State.searchQuery)
+                        UI:UpdateList(filtered)
+                    end
+                end
             end
             task.wait(CONFIG.RefreshInterval)
         end
