@@ -49,6 +49,42 @@ elseif fluxus and fluxus.queue_on_teleport then
     fluxus.queue_on_teleport('loadstring(game:HttpGet("https://pastebin.com/raw/VVpPCn4b"))()')
 end
 
+-- Auto-detect packet key on load
+task.spawn(function()
+    local bridgeNet = ReplicatedStorage:FindFirstChild("ncxyzero_bridgenet2-fork@1.1.5")
+    if not bridgeNet then return end
+    local dataRemote = bridgeNet:FindFirstChild("dataRemoteEvent")
+    if not dataRemote then return end
+    
+    print("[AutoDetect] Waiting for packet key...")
+    
+    local mt = getrawmetatable and getrawmetatable(game)
+    if not mt then return end
+    
+    setreadonly(mt, false)
+    local oldNamecall = mt.__namecall
+    
+    mt.__namecall = function(self, ...)
+        local method = getnamecallmethod()
+        if self == dataRemote and method == "FireServer" then
+            local args = {...}
+            if typeof(args[1]) == "table" then
+                for k, v in pairs(args[1]) do
+                    if typeof(v) == "string" and #v == 1 and v:match("[xyz]") then
+                        _G.DetectedPacketKey = v
+                        print("[AutoDetect] Key found: '" .. v .. "'")
+                        break
+                    end
+                end
+            end
+        end
+        return oldNamecall(self, ...)
+    end
+    
+    setreadonly(mt, true)
+    print("[AutoDetect] Hooked. Capture any base once to detect key.")
+end)
+
 local CONFIG = {
     SaveKey = "ShopAutoBuy_SaveData_v19",
     RefreshInterval = 2,
@@ -574,45 +610,32 @@ end
 
 function MapSystem:captureBase(base)
     local dataRemote = self:getDataRemote()
-    if not dataRemote then
-        print("[Map] Data remote not found")
-        return false
-    end
+    if not dataRemote then return false end
+    if not base or not base.instance or not base.instance.Parent then return false end
     
-    if not base or not base.instance or not base.instance.Parent then
-        print("[Map] Base not valid")
-        return false
-    end
+    local key = _G.DetectedPacketKey or "x"
     
-    print("[Map] === ATTEMPTING CAPTURE ===")
-    print("[Map] Target: " .. base.name)
-    print("[Map] Owner: " .. tostring(base.owner))
-    
-    -- Fire rocket first (no armyIndex)
-    dataRemote:FireServer({
-        {
-            capturePoint = base.instance
-        },
-        "z"
-    })
-    
-    task.wait(0.1)
-    
-    -- Deploy armies 1-4
     for i = 1, 4 do
         dataRemote:FireServer({
             {
                 armyIndex = i,
                 capturePoint = base.instance
             },
-            "y"
+            key
         })
         task.wait(0.05)
     end
     
-    print("[Map] Capture packets sent for: " .. base.name)
     return true
 end
+
+-- Replace the PacketDetector section with this smarter version:
+
+local PacketDetector = {
+    getKey = function()
+        return _G.DetectedPacketKey or "x"
+    end
+}
 
 -- ===== KING OF THE HILL SYSTEM =====
 local KOTHSystem = {}
@@ -640,83 +663,32 @@ function KOTHSystem:getKOTHModels()
     return models
 end
 
-function KOTHSystem:deployRocket(target)
+function KOTHSystem:deployToKOTH(kothModel, key)
+    if not kothModel or not kothModel.Parent then return false end
     local dataRemote = self:getDataRemote()
-    if not dataRemote then
-        print("[KOTH] Data remote not found")
-        return false
-    end
-    if not target or not target.Parent then
-        print("[KOTH] Target not valid")
-        return false
-    end
+    if not dataRemote then return false end
     
-    print("[KOTH] Firing rocket at: " .. target.Name)
-    
-    dataRemote:FireServer({
-        {
-            capturePoint = target
-        },
-        "z"
-    })
-    
-    return true
-end
-
-function KOTHSystem:deployArmy(armyIndex, target)
-    local dataRemote = self:getDataRemote()
-    if not dataRemote then
-        print("[KOTH] Data remote not found")
-        return false
-    end
-    if not target or not target.Parent then
-        print("[KOTH] Target not valid")
-        return false
-    end
-    
-    print("[KOTH] Deploying army " .. armyIndex .. " to: " .. target.Name)
-    
-    dataRemote:FireServer({
-        {
-            armyIndex = armyIndex,
-            capturePoint = target
-        },
-        "y"
-    })
-    
-    return true
-end
-
-function KOTHSystem:deployToKOTH(kothModel)
-    if not kothModel or not kothModel.Parent then
-        print("[KOTH] KOTH model not valid")
-        return false
-    end
-    
-    print("[KOTH] === FULL DEPLOY TO " .. kothModel.Name .. " ===")
-    
-    -- Fire rocket first (no armyIndex)
-    self:deployRocket(kothModel)
-    
-    task.wait(0.1)
-    
-    -- Deploy armies 1-4
     for i = 1, 4 do
-        self:deployArmy(i, kothModel)
+        dataRemote:FireServer({
+            {
+                armyIndex = i,
+                capturePoint = kothModel
+            },
+            key
+        })
         task.wait(0.05)
     end
     
-    print("[KOTH] Deployed successfully to " .. kothModel.Name)
     return true
 end
 
 function KOTHSystem:AutoKOTHLoop()
     while State.running do
         if State.autoKOTH then
+            local key = _G.DetectedPacketKey or "x"
             local kothModels = self:getKOTHModels()
             for _, model in ipairs(kothModels) do
-                self:deployToKOTH(model.instance)
-                task.wait(0.5)
+                self:deployToKOTH(model.instance, key)
             end
         end
         task.wait(15)
