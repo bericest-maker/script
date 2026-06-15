@@ -910,13 +910,13 @@ function UI:Build()
     self:SetupDraggable(mainFrame, header)
     local tabContainer = self:Create("Frame", {Name = "TabContainer", Size = UDim2.new(1, 0, 0, 35), Position = UDim2.new(0, 0, 0, 35), BackgroundColor3 = Color3.fromRGB(30, 30, 35), BorderSizePixel = 0})
     if tabContainer then tabContainer.Parent = mainFrame end
-    local shopTab = self:Create("TextButton", {Name = "ShopTab", Size = UDim2.new(0.25, 0, 1, 0), Position = UDim2.new(0, 0, 0, 0), BackgroundColor3 = Color3.fromRGB(60, 60, 80), Text = "Shop", TextColor3 = Color3.fromRGB(220, 220, 220), TextSize = 14, Font = Enum.Font.GothamSemibold})
+    local shopTab = self:Create("TextButton", {Name = "ShopTab", Size = UDim2.new(0.18, 0, 1, 0), Position = UDim2.new(0, 0, 0, 0), BackgroundColor3 = Color3.fromRGB(60, 60, 80), Text = "Shop", TextColor3 = Color3.fromRGB(220, 220, 220), TextSize = 13, Font = Enum.Font.GothamSemibold})
     if shopTab then shopTab.Parent = tabContainer end
-    local mapTab = self:Create("TextButton", {Name = "MapTab", Size = UDim2.new(0.25, 0, 1, 0), Position = UDim2.new(0.25, 0, 0, 0), BackgroundColor3 = Color3.fromRGB(45, 45, 55), Text = "Base Map", TextColor3 = Color3.fromRGB(220, 220, 220), TextSize = 14, Font = Enum.Font.GothamSemibold})
+    local mapTab = self:Create("TextButton", {Name = "MapTab", Size = UDim2.new(0.18, 0, 1, 0), Position = UDim2.new(0.18, 0, 0, 0), BackgroundColor3 = Color3.fromRGB(45, 45, 55), Text = "Base Map", TextColor3 = Color3.fromRGB(220, 220, 220), TextSize = 13, Font = Enum.Font.GothamSemibold})
     if mapTab then mapTab.Parent = tabContainer end
-    local bmTab = self:Create("TextButton", {Name = "BlackMarketTab", Size = UDim2.new(0.25, 0, 1, 0), Position = UDim2.new(0.50, 0, 0, 0), BackgroundColor3 = Color3.fromRGB(45, 45, 55), Text = "Black Market", TextColor3 = Color3.fromRGB(220, 220, 220), TextSize = 14, Font = Enum.Font.GothamSemibold})
+    local bmTab = self:Create("TextButton", {Name = "BlackMarketTab", Size = UDim2.new(0.22, 0, 1, 0), Position = UDim2.new(0.36, 0, 0, 0), BackgroundColor3 = Color3.fromRGB(45, 45, 55), Text = "Black Market", TextColor3 = Color3.fromRGB(220, 220, 220), TextSize = 12, Font = Enum.Font.GothamSemibold})
     if bmTab then bmTab.Parent = tabContainer end
-    local searchBox = self:Create("TextBox", {Name = "SearchBox", Size = UDim2.new(0.35, -10, 0.8, 0), Position = UDim2.new(0.55, 5, 0.1, 0), BackgroundColor3 = Color3.fromRGB(50, 50, 60), Text = "", PlaceholderText = "Search items...", TextColor3 = Color3.fromRGB(220, 220, 220), PlaceholderColor3 = Color3.fromRGB(150, 150, 150), TextSize = 12, Font = Enum.Font.Gotham, ClearTextOnFocus = false})
+    local searchBox = self:Create("TextBox", {Name = "SearchBox", Size = UDim2.new(0.32, -10, 0.8, 0), Position = UDim2.new(0.62, 5, 0.1, 0), BackgroundColor3 = Color3.fromRGB(50, 50, 60), Text = "", PlaceholderText = "Search items...", TextColor3 = Color3.fromRGB(220, 220, 220), PlaceholderColor3 = Color3.fromRGB(150, 150, 150), TextSize = 12, Font = Enum.Font.Gotham, ClearTextOnFocus = false})
     if searchBox then
         searchBox.Parent = tabContainer
         local searchCorner = self:Create("UICorner", {CornerRadius = UDim.new(0, 4)})
