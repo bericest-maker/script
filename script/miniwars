@@ -49,14 +49,14 @@ elseif fluxus and fluxus.queue_on_teleport then
     fluxus.queue_on_teleport('loadstring(game:HttpGet("https://pastebin.com/raw/VVpPCn4b"))()')
 end
 
--- Auto-detect packet key on load
+-- Auto-detect packet keys on load
 task.spawn(function()
-    local bridgeNet = ReplicatedStorage:FindFirstChild("ncxyzero_bridgenet2-fork@1.1.5")
+    local bridgeNet = game:GetService("ReplicatedStorage")["ncxyzero_bridgenet2-fork@1.1.5"]
     if not bridgeNet then return end
-    local dataRemote = bridgeNet:FindFirstChild("dataRemoteEvent")
+    local dataRemote = bridgeNet["dataRemoteEvent"]
     if not dataRemote then return end
     
-    print("[AutoDetect] Waiting for packet key...")
+    print("[AutoDetect] Waiting for keys...")
     
     local mt = getrawmetatable and getrawmetatable(game)
     if not mt then return end
@@ -69,11 +69,29 @@ task.spawn(function()
         if self == dataRemote and method == "FireServer" then
             local args = {...}
             if typeof(args[1]) == "table" then
+                local hasCapture = false
+                local hasArmyIndex = false
+                local theKey = nil
+                
                 for k, v in pairs(args[1]) do
-                    if typeof(v) == "string" and #v == 1 and v:match("[xyz]") then
-                        _G.DetectedPacketKey = v
-                        print("[AutoDetect] Key found: '" .. v .. "'")
-                        break
+                    if typeof(v) == "table" then
+                        if v.capturePoint then hasCapture = true end
+                        if v.armyIndex then hasArmyIndex = true end
+                    end
+                end
+                
+                -- Get key from arg 2
+                if typeof(args[2]) == "string" and #args[2] == 1 then
+                    theKey = args[2]
+                end
+                
+                if hasCapture and theKey then
+                    if hasArmyIndex then
+                        _G.DetectedArmyKey = theKey
+                        print("[AutoDetect] Army key: '" .. theKey .. "'")
+                    else
+                        _G.DetectedRocketKey = theKey
+                        print("[AutoDetect] Rocket key: '" .. theKey .. "'")
                     end
                 end
             end
@@ -82,9 +100,8 @@ task.spawn(function()
     end
     
     setreadonly(mt, true)
-    print("[AutoDetect] Hooked. Capture any base once to detect key.")
+    print("[AutoDetect] Hooked. Deploy rocket + 1 army to detect keys.")
 end)
-
 local CONFIG = {
     SaveKey = "ShopAutoBuy_SaveData_v19",
     RefreshInterval = 2,
@@ -561,9 +578,9 @@ end
 local MapSystem = {}
 
 function MapSystem:getDataRemote()
-    local bridgeNet = ReplicatedStorage:FindFirstChild("ncxyzero_bridgenet2-fork@1.1.5")
+    local bridgeNet = game:GetService("ReplicatedStorage")["ncxyzero_bridgenet2-fork@1.1.5"]
     if not bridgeNet then return nil end
-    return bridgeNet:FindFirstChild("dataRemoteEvent")
+    return bridgeNet["dataRemoteEvent"]
 end
 
 function MapSystem:getMetaRemote()
@@ -613,15 +630,31 @@ function MapSystem:captureBase(base)
     if not dataRemote then return false end
     if not base or not base.instance or not base.instance.Parent then return false end
     
-    local key = _G.DetectedPacketKey or "x"
+    local rocketKey = _G.DetectedRocketKey
+    local armyKey = _G.DetectedArmyKey
     
+    if not rocketKey or not armyKey then
+        print("[Map] Keys not detected! Deploy rocket + army manually first.")
+        return false
+    end
+    
+    -- Send ROCKET first (no armyIndex)
+    dataRemote:FireServer({
+        {
+            capturePoint = base.instance
+        },
+        rocketKey
+    })
+    task.wait(0.05)
+    
+    -- Send ARMIES 1-4
     for i = 1, 4 do
         dataRemote:FireServer({
             {
                 armyIndex = i,
                 capturePoint = base.instance
             },
-            key
+            armyKey
         })
         task.wait(0.05)
     end
@@ -641,9 +674,9 @@ local PacketDetector = {
 local KOTHSystem = {}
 
 function KOTHSystem:getDataRemote()
-    local bridgeNet = ReplicatedStorage:FindFirstChild("ncxyzero_bridgenet2-fork@1.1.5")
+    local bridgeNet = game:GetService("ReplicatedStorage")["ncxyzero_bridgenet2-fork@1.1.5"]
     if not bridgeNet then return nil end
-    return bridgeNet:FindFirstChild("dataRemoteEvent")
+    return bridgeNet["dataRemoteEvent"]
 end
 
 function KOTHSystem:getKOTHModels()
@@ -668,13 +701,31 @@ function KOTHSystem:deployToKOTH(kothModel, key)
     local dataRemote = self:getDataRemote()
     if not dataRemote then return false end
     
+    local rocketKey = _G.DetectedRocketKey
+    local armyKey = _G.DetectedArmyKey or key
+    
+    if not rocketKey or not armyKey then
+        print("[KOTH] Keys not detected yet!")
+        return false
+    end
+    
+    -- Rocket
+    dataRemote:FireServer({
+        {
+            capturePoint = kothModel
+        },
+        rocketKey
+    })
+    task.wait(0.05)
+    
+    -- Armies 1-4
     for i = 1, 4 do
         dataRemote:FireServer({
             {
                 armyIndex = i,
                 capturePoint = kothModel
             },
-            key
+            armyKey
         })
         task.wait(0.05)
     end
