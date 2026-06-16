@@ -365,63 +365,99 @@
     end
     
     local ShopData = {}
-    
-    function ShopData:GetShopGrid()
-        return Utility:SafeFindFirstChild(player, "PlayerGui", "MainUI", "Fullscreen", "BuyUI", "ItemsGrid")
-    end
-    
-   function ShopData:GetBlackMarketGrid()
-    -- YOUR INDEX PATH — this is the one that actually works
+
+function ShopData:GetShopGrid()
+    return Utility:SafeFindFirstChild(player, "PlayerGui", "MainUI", "Fullscreen", "BuyUI", "ItemsGrid")
+end
+
+function ShopData:GetBlackMarketGrid()
+    -- Method 1: Your exact index path
     local success, result = pcall(function()
         return game:GetChildren()[17]:GetChildren()[1]:GetChildren()[2]:GetChildren()[2]:GetChildren()[2]:GetChildren()[16]:GetChildren()[3]
     end)
-    if success and result and result:IsA("GuiObject") then 
-        return result 
+    if success and result and result:IsA("GuiObject") then
+        -- Verify it's actually BlackMarketUI by checking parent name
+        if result.Parent and result.Parent.Name == "BlackMarketUI" then
+            return result
+        end
     end
+    
+    -- Method 2: Walk PlayerGui to find BlackMarketUI
+    local pg = player:FindFirstChild("PlayerGui")
+    if pg then
+        for _, child in ipairs(pg:GetDescendants()) do
+            if child.Name == "BlackMarketUI" then
+                local grid = child:FindFirstChild("ItemsGrid")
+                if grid then return grid end
+            end
+        end
+    end
+    
+    -- Method 3: Walk game to find anything named BlackMarketUI
+    for _, child in ipairs(game:GetDescendants()) do
+        if child.Name == "BlackMarketUI" then
+            local grid = child:FindFirstChild("ItemsGrid")
+            if grid then return grid end
+        end
+    end
+    
     return nil
 end
-    
-    function ShopData:RefreshShop()
-        local grid = self:GetShopGrid()
-        State.shopItems = ItemParser:ScanItems(grid)
-        self:SortItems(State.shopItems)
-        return State.shopItems
-    end
-    
-    function ShopData:RefreshBlackMarket()
-        if not State.isBlackMarketActive then
-            State.blackMarketItems = {}
-            return State.blackMarketItems
-        end
-        local grid = self:GetBlackMarketGrid()
-        State.blackMarketItems = ItemParser:ScanItems(grid)
-        self:SortItems(State.blackMarketItems)
+
+function ShopData:RefreshShop()
+    local grid = self:GetShopGrid()
+    State.shopItems = ItemParser:ScanItems(grid)
+    self:SortItems(State.shopItems)
+    return State.shopItems
+end
+
+function ShopData:RefreshBlackMarket()
+    if not State.isBlackMarketActive then
+        State.blackMarketItems = {}
         return State.blackMarketItems
     end
     
-    function ShopData:SortItems(items)
-        table.sort(items, function(a, b)
-            if a.hasStock ~= b.hasStock then return a.hasStock end
-            if a.rarityValue ~= b.rarityValue then return a.rarityValue > b.rarityValue end
-            return a.name < b.name
-        end)
-    end
-    
-    function ShopData:GetCurrentItems()
-        if State.currentTab == "Shop" then return State.shopItems end
-        if State.currentTab == "BlackMarket" then return State.blackMarketItems end
+    local grid = self:GetBlackMarketGrid()
+    if not grid then
+        print("[BM] ERROR: Grid is nil!")
+        State.blackMarketItems = {}
         return State.blackMarketItems
     end
     
-    function ShopData:FilterItems(items, query)
-        if not query or query == "" then return items end
-        query = query:lower()
-        local filtered = {}
-        for _, item in ipairs(items) do
-            if item.name:lower():find(query, 1, true) then table.insert(filtered, item) end
-        end
-        return filtered
+    print("[BM] Grid found: " .. grid:GetFullName())
+    print("[BM] Grid parent: " .. (grid.Parent and grid.Parent.Name or "nil"))
+    print("[BM] Grid children count: " .. #grid:GetChildren())
+    
+    State.blackMarketItems = ItemParser:ScanItems(grid)
+    print("[BM] Parsed items: " .. #State.blackMarketItems)
+    
+    self:SortItems(State.blackMarketItems)
+    return State.blackMarketItems
+end
+
+function ShopData:SortItems(items)
+    table.sort(items, function(a, b)
+        if a.hasStock ~= b.hasStock then return a.hasStock end
+        if a.rarityValue ~= b.rarityValue then return a.rarityValue > b.rarityValue end
+        return a.name < b.name
+    end)
+end
+
+function ShopData:GetCurrentItems()
+    if State.currentTab == "Shop" then return State.shopItems end
+    if State.currentTab == "BlackMarket" then return State.blackMarketItems end
+    return {}
+end
+
+function ShopData:FilterItems(items, query)
+    if not query or query == "" then return items end
+    query = query:lower()
+    local filtered = {}
+    for _, item in ipairs(items) do
+        if item.name:lower():find(query, 1, true) then table.insert(filtered, item) end
     end
+    return filtered
+end
     
     local PurchaseSystem = {}
     
