@@ -538,60 +538,194 @@ function CollectSystem:GetTargetPriority(building, prompt, hrp)
     local text = (prompt.ObjectText or "") .. " " .. (prompt.ActionText or "")
     local amount = Utility:ExtractAmount(text)
     local isGemMine = building.Name == "GemMine"
-    local pos = building:GetPivot().Position
-    return {building = building, prompt = prompt, pos = pos, value = amount, gem = isGemMine, dist = (pos - hrp.Position).Magnitude}
+    
+    local ok, pos = pcall(function()
+        if building.GetPivot then
+            return building:GetPivot().Position
+        end
+        return building.Position
+    end)
+    
+    if not ok or not pos then
+        pos = hrp.Position -- fallback, won't move but can still fire
+    end
+    
+    return {
+        building = building,
+        prompt = prompt,
+        pos = pos,
+        value = amount,
+        gem = isGemMine,
+        dist = (pos - hrp.Position).Magnitude
+    }
 end
 
-function CollectSystem:GetBestTargets(hrp)
-    -- Scan ALL ProximityPrompts in workspace — server enforces ownership, so safe to attempt any
-    local targets = {}
-    for _, desc in ipairs(workspace:GetDescendants()) do
-        if desc:IsA("ProximityPrompt") and self:HasValue(desc) then
-            local part = desc.Parent
-            local ok, pos = pcall(function()
-                if part.GetPivot then return part:GetPivot().Position end
-                return part.Position
-            end)
-            if ok and pos then
-                local dist = (pos - hrp.Position).Magnitude
-                local text = (desc.ObjectText or "") .. " " .. (desc.ActionText or "")
-                table.insert(targets, {
-                    building = part, prompt = desc, pos = pos,
-                    value = Utility:ExtractAmount(text),
-                    gem = part.Name == "GemMine",
-                    dist = dist,
-                })
+function CollectSystem:FindBuildingsFolder(plot)
+    if not plot then return nil end
+    
+    -- Try multiple common paths
+    local paths = {
+        {"Plot", "Buildings"},
+        {"Buildings"},
+        {"Built"},
+        {"Plot", "Built"},
+        {"Tycoon", "Buildings"},
+        {"Objects", "Buildings"},
+        {"Base", "Buildings"},
+    }
+    
+    for _, path in ipairs(paths) do
+        local current = plot
+        local valid = true
+        for _, name in ipairs(path) do
+            current = current:FindFirstChild(name)
+            if not current then
+                valid = false
+                break
             end
         end
+        if valid then
+            return current
+        end
     end
+    
+    -- Last resort: search direct children for anything with "Build" in name
+    for _, child in ipairs(plot:GetChildren()) do
+        if child.Name:find("Build") or child.Name:find("Plot") then
+            return child
+        end
+    end
+    
+    return nil
+end
+
+function CollectSystem:GetBestTargets(plot, hrp)
+    local folder = self:FindBuildingsFolder(plot)
+    
+    if not folder then
+        -- Fallback: scan all ProximityPrompts in workspace
+        print("[Collect] No buildings folder found, scanning workspace...")
+        local targets = {}
+        for _, desc in ipairs(workspace:GetDescendants()) do
+            if desc:IsA("ProximityPrompt") and self:HasValue(desc) then
+                local part = desc.Parent
+                local ok, pos = pcall(function()
+                    if part.GetPivot then return part:GetPivot().Position end
+                    return part.Position
+                end)
+                if ok and pos then
+                    local dist = (pos - hrp.Position).Magnitude
+                    local text = (desc.ObjectText or "") .. " " .. (desc.ActionText or "")
+                    table.insert(targets, {
+                        building = part,
+                        prompt = desc,
+                        pos = pos,
+                        value = Utility:ExtractAmount(text),
+                        gem = part.Name == "GemMine",
+                        dist = dist,
+                    })
+                end
+            end
+        end
+        table.sort(targets, function(a, b)
+            if a.gem ~= b.gem then return a.gem end
+            if a.value ~= b.value then return a.value > b.value end
+            return a.dist < b.dist
+        end)
+        return targets
+    end
+    
+    local targets = {}
+    for _, building in ipairs(folder:GetChildren()) do
+        local prompt = building:FindFirstChildWhichIsA("ProximityPrompt", true)
+        if prompt and self:HasValue(prompt) then
+            table.insert(targets, self:GetTargetPriority(building, prompt, hrp))
+        end
+    end
+    
     table.sort(targets, function(a, b)
         if a.gem ~= b.gem then return a.gem end
         if a.value ~= b.value then return a.value > b.value end
         return a.dist < b.dist
     end)
+    
     return targets
 end
 
+function CollectSystem:MoveToTarget(hum, targetPos)
+    local startTime = tick()
+    hum:MoveTo(targetPos)
+    
+    -- Wait until close enough or timeout
+    while tick() - startTime < 3 do
+        local char = player.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if not hrp then return false end
+        if (hrp.Position - targetPos).Magnitude < 8 then
+            return true
+        end
+        task.wait(0.1)
+    end
+    return false
+end
+
 function CollectSystem:CollectLoop()
+    print("[Collect] Loop started")
+    
     while State.autoCollect do
         local char = player.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         local hum = char and char:FindFirstChildOfClass("Humanoid")
+        
         if not hrp or not hum then
+            task.wait(0.5)
+            continue
+        end
+        
+        if not State.myPlot then
+            PlotSystem:RefreshPlot()
+            task.wait(0.5)
+        end
+        
+        if not State.myPlot then
+            print("[Collect] Waiting for plot...")
             task.wait(1)
             continue
         end
-        local targets = self:GetBestTargets(hrp)
-        if #targets > 0 then
-            local target = targets[1]
-            hum:MoveTo(target.pos)
+        
+        local targets = self:GetBestTargets(State.myPlot, hrp)
+        
+        if #targets == 0 then
             task.wait(0.5)
-            pcall(function() fireproximityprompt(target.prompt) end)
-            task.wait(0.2)
-        else
-            task.wait(1)
+            continue
         end
+        
+        local target = targets[1]
+        
+        -- Move to target
+        local reached = self:MoveToTarget(hum, target.pos)
+        
+        if reached then
+            -- Try multiple times to fire the prompt
+            for i = 1, 3 do
+                local success = pcall(function()
+                    fireproximityprompt(target.prompt)
+                end)
+                if success then
+                    print("[Collect] Fired prompt for:", target.building.Name)
+                else
+                    print("[Collect] fireproximityprompt failed, attempt", i)
+                end
+                task.wait(0.15)
+            end
+        else
+            print("[Collect] Failed to reach target:", target.building.Name)
+        end
+        
+        task.wait(0.2)
     end
+    
+    print("[Collect] Loop ended")
 end
 
 -- ===== MAP SYSTEM =====
