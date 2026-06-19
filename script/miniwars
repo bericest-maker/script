@@ -104,8 +104,8 @@ task.spawn(function()
 end)
 local CONFIG = {
     SaveKey = "ShopAutoBuy_SaveData_v19",
-    RefreshInterval = 2,
-    BuyCooldown = 2,
+    RefreshInterval = 5,
+    BuyCooldown = 0.1,
     KOTHDeployInterval = 3,
     AutoSaveInterval = 5,
     UI = {
