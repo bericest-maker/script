@@ -503,7 +503,7 @@ function PurchaseSystem:BuyItem(itemName)
     end
 
     if success then
-        task.wait(0.5)
+        task.wait(0.1)
     end
 
     return success
@@ -1960,7 +1960,7 @@ function MainLoop:StartAutoBuyLoop()
             if State.autoBuy then
                 PurchaseSystem:AutoBuy()
             end
-            task.wait(1)
+            task.wait(0.25)
         end
     end)
     table.insert(State.threads, thread)
