@@ -511,10 +511,13 @@ function CollectSystem:GetTargetPriority(building, prompt, hrp)
     return {building = building, prompt = prompt, pos = pos, value = amount, gem = isGemMine, dist = (pos - hrp.Position).Magnitude}
 end
 
-function CollectSystem:GetBestTargets(hrp)
-    -- Scan ALL ProximityPrompts in workspace — server enforces ownership, so safe to attempt any
+function CollectSystem:GetBestTargets(plot, hrp)
+    if not plot then return {} end
+    
     local targets = {}
-    for _, desc in ipairs(workspace:GetDescendants()) do
+    
+    -- Scan your plot's descendants for ProximityPrompts
+    for _, desc in ipairs(plot:GetDescendants()) do
         if desc:IsA("ProximityPrompt") and self:HasValue(desc) then
             local part = desc.Parent
             local ok, pos = pcall(function()
@@ -533,6 +536,7 @@ function CollectSystem:GetBestTargets(hrp)
             end
         end
     end
+    
     table.sort(targets, function(a, b)
         if a.gem ~= b.gem then return a.gem end
         if a.value ~= b.value then return a.value > b.value end
@@ -546,11 +550,25 @@ function CollectSystem:CollectLoop()
         local char = player.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         local hum = char and char:FindFirstChildOfClass("Humanoid")
+        
         if not hrp or not hum then
             task.wait(1)
             continue
         end
-        local targets = self:GetBestTargets(hrp)
+        
+        -- Refresh plot if needed
+        if not State.myPlot then
+            PlotSystem:RefreshPlot()
+            task.wait(0.5)
+        end
+        
+        if not State.myPlot then
+            task.wait(1)
+            continue
+        end
+        
+        local targets = self:GetBestTargets(State.myPlot, hrp)
+        
         if #targets > 0 then
             local target = targets[1]
             hum:MoveTo(target.pos)
