@@ -49,63 +49,10 @@ elseif fluxus and fluxus.queue_on_teleport then
     fluxus.queue_on_teleport('loadstring(game:HttpGet("https://raw.githubusercontent.com/bericest-maker/script/refs/heads/main/script/miniwars"))()')
 end
 
--- Auto-detect packet keys on load
-task.spawn(function()
-    local bridgeNet = game:GetService("ReplicatedStorage")["ncxyzero_bridgenet2-fork@1.1.5"]
-    if not bridgeNet then return end
-    local dataRemote = bridgeNet["dataRemoteEvent"]
-    if not dataRemote then return end
-    
-    print("[AutoDetect] Waiting for keys...")
-    
-    local mt = getrawmetatable and getrawmetatable(game)
-    if not mt then return end
-    
-    setreadonly(mt, false)
-    local oldNamecall = mt.__namecall
-    
-    mt.__namecall = function(self, ...)
-        local method = getnamecallmethod()
-        if self == dataRemote and method == "FireServer" then
-            local args = {...}
-            if typeof(args[1]) == "table" then
-                local hasCapture = false
-                local hasArmyIndex = false
-                local theKey = nil
-                
-                for k, v in pairs(args[1]) do
-                    if typeof(v) == "table" then
-                        if v.capturePoint then hasCapture = true end
-                        if v.armyIndex then hasArmyIndex = true end
-                    end
-                end
-                
-                -- Get key from arg 2
-                if typeof(args[2]) == "string" and #args[2] == 1 then
-                    theKey = args[2]
-                end
-                
-                if hasCapture and theKey then
-                    if hasArmyIndex then
-                        _G.DetectedArmyKey = theKey
-                        print("[AutoDetect] Army key: '" .. theKey .. "'")
-                    else
-                        _G.DetectedRocketKey = theKey
-                        print("[AutoDetect] Rocket key: '" .. theKey .. "'")
-                    end
-                end
-            end
-        end
-        return oldNamecall(self, ...)
-    end
-    
-    setreadonly(mt, true)
-    print("[AutoDetect] Hooked. Deploy rocket + 1 army to detect keys.")
-end)
 local CONFIG = {
     SaveKey = "ShopAutoBuy_SaveData_v19",
-    RefreshInterval = 5,
-    BuyCooldown = 0.1,
+    RefreshInterval = 2,
+    BuyCooldown = 2,
     KOTHDeployInterval = 3,
     AutoSaveInterval = 5,
     UI = {
@@ -148,6 +95,7 @@ local State = {
     mapPanStart = nil,
     mapBases = {},
     autoKOTH = false,
+    mapHovered = false,
 }
 
 local Utility = {}
@@ -336,6 +284,19 @@ function ItemParser:ParseItem(item)
         end
     end
     if itemName == "" then return nil end
+
+    -- Detect shop category from BuildingsConfig
+    local category = "Farm" -- safe default
+    pcall(function()
+        local BuildingsConfig = require(ReplicatedStorage:FindFirstChild("BuildingsConfig", true))
+        local cfg = BuildingsConfig[itemName]
+        if cfg then
+            -- ShopType overrides Type; skip items flagged dontDisplayInShop
+            if cfg.dontDisplayInShop then return end
+            category = cfg.ShopType or cfg.Type or category
+        end
+    end)
+
     local hasStock = Utility:HasStock(stock)
     local rarityValue = Utility:GetRarityValue(Utility:ParseRarity(rarity))
     local formattedPrice = Utility:FormatPrice(priceText)
@@ -344,6 +305,7 @@ function ItemParser:ParseItem(item)
         rarity = Utility:ParseRarity(rarity), rarityText = rarity,
         rarityValue = rarityValue, price = formattedPrice,
         priceFormatted = formattedPrice, rawPrice = priceText,
+        category = category,
         instance = item, selected = State.autoBuySelections[itemName] or false,
     }
 end
@@ -456,54 +418,61 @@ function PurchaseSystem:BuyItem(itemName)
         print("[AutoBuy] Item not in list: " .. itemName)
         return false
     end
-
     if not targetItem.hasStock then
         print("[AutoBuy] Item out of stock: " .. itemName)
         return false
     end
 
-    local liveBtn = self:FindLiveBuyButton(itemName)
-    if not liveBtn then
-        print("[AutoBuy] Live Buy button not found for: " .. itemName)
-        return false
+    local isBlackMarket = State.currentTab == "BlackMarket"
+    local success = false
+
+    -- PRIMARY: GetBridge (reliable server-side purchase)
+    local bridgeOk, bridgeErr = pcall(function()
+        local GetBridge = require(ReplicatedStorage.util.GetBridge)
+        if isBlackMarket then
+            GetBridge("BuyFromBlackMarketShop"):Fire({
+                shop = "BlackMarket",
+                item = itemName,
+            })
+        else
+            GetBridge("BuyFromShop"):Fire({
+                shop = targetItem.category or "Farm",
+                item = itemName,
+            })
+        end
+    end)
+
+    if bridgeOk then
+        success = true
+        print("[AutoBuy] GetBridge purchase: " .. itemName .. (isBlackMarket and " (BlackMarket)" or " (" .. (targetItem.category or "?") .. ")"))
+    else
+        warn("[AutoBuy] GetBridge failed (" .. tostring(bridgeErr) .. "), falling back to firesignal")
     end
 
-    print("[AutoBuy] Buying: " .. itemName .. " (btn: " .. liveBtn.ClassName .. ")")
-
-    local success = false
-    if firesignal then
-        local downEvent = liveBtn.MouseButton1Down
-        if downEvent and typeof(downEvent) == "RBXScriptSignal" then
-            firesignal(downEvent)
-            success = true
-            print("[AutoBuy] Fired MouseButton1Down for: " .. itemName)
+    -- FALLBACK: firesignal on the live UI button
+    if not success and firesignal then
+        local liveBtn = self:FindLiveBuyButton(itemName)
+        if liveBtn then
+            local downEvent = liveBtn.MouseButton1Down
+            if downEvent and typeof(downEvent) == "RBXScriptSignal" then
+                firesignal(downEvent)
+                task.wait(0.05)
+                local upEvent = liveBtn.MouseButton1Up
+                if upEvent and typeof(upEvent) == "RBXScriptSignal" then firesignal(upEvent) end
+                task.wait(0.05)
+                local clickEvent = liveBtn.MouseButton1Click
+                if clickEvent and typeof(clickEvent) == "RBXScriptSignal" then firesignal(clickEvent) end
+                success = true
+                print("[AutoBuy] firesignal fallback: " .. itemName)
+            end
+        else
+            print("[AutoBuy] No live buy button found for: " .. itemName)
         end
-        
-        task.wait(0.05)
-        
-        local upEvent = liveBtn.MouseButton1Up
-        if upEvent and typeof(upEvent) == "RBXScriptSignal" then
-            firesignal(upEvent)
-            print("[AutoBuy] Fired MouseButton1Up for: " .. itemName)
-        end
-        
-        task.wait(0.05)
-        
-        local clickEvent = liveBtn.MouseButton1Click
-        if clickEvent and typeof(clickEvent) == "RBXScriptSignal" then
-            firesignal(clickEvent)
-            print("[AutoBuy] Fired MouseButton1Click for: " .. itemName)
-        end
-        
-        if success then
-            State.lastBuyTime = tick()
-        end
-    else
-        print("[AutoBuy] firesignal not available")
     end
 
     if success then
-        task.wait(0.1)
+        State.lastBuyTime = tick()
+        task.wait(0.5)
     end
 
     return success
@@ -538,210 +507,64 @@ function CollectSystem:GetTargetPriority(building, prompt, hrp)
     local text = (prompt.ObjectText or "") .. " " .. (prompt.ActionText or "")
     local amount = Utility:ExtractAmount(text)
     local isGemMine = building.Name == "GemMine"
-    
-    local ok, pos = pcall(function()
-        if building.GetPivot then
-            return building:GetPivot().Position
-        end
-        return building.Position
-    end)
-    
-    if not ok or not pos then
-        pos = hrp.Position -- fallback, won't move but can still fire
-    end
-    
-    return {
-        building = building,
-        prompt = prompt,
-        pos = pos,
-        value = amount,
-        gem = isGemMine,
-        dist = (pos - hrp.Position).Magnitude
-    }
+    local pos = building:GetPivot().Position
+    return {building = building, prompt = prompt, pos = pos, value = amount, gem = isGemMine, dist = (pos - hrp.Position).Magnitude}
 end
 
-function CollectSystem:FindBuildingsFolder(plot)
-    if not plot then return nil end
-    
-    -- Try multiple common paths
-    local paths = {
-        {"Plot", "Buildings"},
-        {"Buildings"},
-        {"Built"},
-        {"Plot", "Built"},
-        {"Tycoon", "Buildings"},
-        {"Objects", "Buildings"},
-        {"Base", "Buildings"},
-    }
-    
-    for _, path in ipairs(paths) do
-        local current = plot
-        local valid = true
-        for _, name in ipairs(path) do
-            current = current:FindFirstChild(name)
-            if not current then
-                valid = false
-                break
-            end
-        end
-        if valid then
-            return current
-        end
-    end
-    
-    -- Last resort: search direct children for anything with "Build" in name
-    for _, child in ipairs(plot:GetChildren()) do
-        if child.Name:find("Build") or child.Name:find("Plot") then
-            return child
-        end
-    end
-    
-    return nil
-end
-
-function CollectSystem:GetBestTargets(plot, hrp)
-    local folder = self:FindBuildingsFolder(plot)
-    
-    if not folder then
-        -- Fallback: scan all ProximityPrompts in workspace
-        print("[Collect] No buildings folder found, scanning workspace...")
-        local targets = {}
-        for _, desc in ipairs(workspace:GetDescendants()) do
-            if desc:IsA("ProximityPrompt") and self:HasValue(desc) then
-                local part = desc.Parent
-                local ok, pos = pcall(function()
-                    if part.GetPivot then return part:GetPivot().Position end
-                    return part.Position
-                end)
-                if ok and pos then
-                    local dist = (pos - hrp.Position).Magnitude
-                    local text = (desc.ObjectText or "") .. " " .. (desc.ActionText or "")
-                    table.insert(targets, {
-                        building = part,
-                        prompt = desc,
-                        pos = pos,
-                        value = Utility:ExtractAmount(text),
-                        gem = part.Name == "GemMine",
-                        dist = dist,
-                    })
-                end
-            end
-        end
-        table.sort(targets, function(a, b)
-            if a.gem ~= b.gem then return a.gem end
-            if a.value ~= b.value then return a.value > b.value end
-            return a.dist < b.dist
-        end)
-        return targets
-    end
-    
+function CollectSystem:GetBestTargets(hrp)
+    -- Scan ALL ProximityPrompts in workspace — server enforces ownership, so safe to attempt any
     local targets = {}
-    for _, building in ipairs(folder:GetChildren()) do
-        local prompt = building:FindFirstChildWhichIsA("ProximityPrompt", true)
-        if prompt and self:HasValue(prompt) then
-            table.insert(targets, self:GetTargetPriority(building, prompt, hrp))
+    for _, desc in ipairs(workspace:GetDescendants()) do
+        if desc:IsA("ProximityPrompt") and self:HasValue(desc) then
+            local part = desc.Parent
+            local ok, pos = pcall(function()
+                if part.GetPivot then return part:GetPivot().Position end
+                return part.Position
+            end)
+            if ok and pos then
+                local dist = (pos - hrp.Position).Magnitude
+                local text = (desc.ObjectText or "") .. " " .. (desc.ActionText or "")
+                table.insert(targets, {
+                    building = part, prompt = desc, pos = pos,
+                    value = Utility:ExtractAmount(text),
+                    gem = part.Name == "GemMine",
+                    dist = dist,
+                })
+            end
         end
     end
-    
     table.sort(targets, function(a, b)
         if a.gem ~= b.gem then return a.gem end
         if a.value ~= b.value then return a.value > b.value end
         return a.dist < b.dist
     end)
-    
     return targets
 end
 
-function CollectSystem:MoveToTarget(hum, targetPos)
-    local startTime = tick()
-    hum:MoveTo(targetPos)
-    
-    -- Wait until close enough or timeout
-    while tick() - startTime < 3 do
-        local char = player.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if not hrp then return false end
-        if (hrp.Position - targetPos).Magnitude < 8 then
-            return true
-        end
-        task.wait(0.1)
-    end
-    return false
-end
-
 function CollectSystem:CollectLoop()
-    print("[Collect] Loop started")
-    
     while State.autoCollect do
         local char = player.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         local hum = char and char:FindFirstChildOfClass("Humanoid")
-        
         if not hrp or not hum then
-            task.wait(0.5)
-            continue
-        end
-        
-        if not State.myPlot then
-            PlotSystem:RefreshPlot()
-            task.wait(0.5)
-        end
-        
-        if not State.myPlot then
-            print("[Collect] Waiting for plot...")
             task.wait(1)
             continue
         end
-        
-        local targets = self:GetBestTargets(State.myPlot, hrp)
-        
-        if #targets == 0 then
+        local targets = self:GetBestTargets(hrp)
+        if #targets > 0 then
+            local target = targets[1]
+            hum:MoveTo(target.pos)
             task.wait(0.5)
-            continue
-        end
-        
-        local target = targets[1]
-        
-        -- Move to target
-        local reached = self:MoveToTarget(hum, target.pos)
-        
-        if reached then
-            -- Try multiple times to fire the prompt
-            for i = 1, 3 do
-                local success = pcall(function()
-                    fireproximityprompt(target.prompt)
-                end)
-                if success then
-                    print("[Collect] Fired prompt for:", target.building.Name)
-                else
-                    print("[Collect] fireproximityprompt failed, attempt", i)
-                end
-                task.wait(0.15)
-            end
+            pcall(function() fireproximityprompt(target.prompt) end)
+            task.wait(0.2)
         else
-            print("[Collect] Failed to reach target:", target.building.Name)
+            task.wait(1)
         end
-        
-        task.wait(0.2)
     end
-    
-    print("[Collect] Loop ended")
 end
 
 -- ===== MAP SYSTEM =====
 local MapSystem = {}
-
-function MapSystem:getDataRemote()
-    local bridgeNet = game:GetService("ReplicatedStorage")["ncxyzero_bridgenet2-fork@1.1.5"]
-    if not bridgeNet then return nil end
-    return bridgeNet["dataRemoteEvent"]
-end
-
-function MapSystem:getMetaRemote()
-    local bridgeNet = ReplicatedStorage:FindFirstChild("ncxyzero_bridgenet2-fork@1.1.5")
-    if not bridgeNet then return nil end
-    return bridgeNet:FindFirstChild("metaRemoteEvent")
-end
 
 function MapSystem:scanBases()
     local bases = {}
@@ -780,73 +603,29 @@ function MapSystem:worldToMap(pos)
 end
 
 function MapSystem:captureBase(base)
-    local dataRemote = self:getDataRemote()
-    if not dataRemote then return false end
     if not base or not base.instance or not base.instance.Parent then return false end
-    
-    local keys = {"x", "y", "z"}
-    local rocketKey = _G.DetectedRocketKey
-    local armyKey = _G.DetectedArmyKey
-    
-    if rocketKey and armyKey then
-        dataRemote:FireServer({
-            {capturePoint = base.instance},
-            rocketKey
-        })
+    local ok, GetBridge = pcall(function()
+        return require(ReplicatedStorage.util.GetBridge)
+    end)
+    if not ok or not GetBridge then
+        warn("[MapCapture] GetBridge not available: " .. tostring(GetBridge))
+        return false
+    end
+    pcall(function()
+        GetBridge("SendRocketsToPoint"):Fire({capturePoint = base.instance})
+    end)
+    task.wait(0.05)
+    for i = 1, 4 do
+        pcall(function()
+            GetBridge("SendTroopsToPoint"):Fire({armyIndex = i, capturePoint = base.instance})
+        end)
         task.wait(0.05)
-        
-        for i = 1, 4 do
-            dataRemote:FireServer({
-                {armyIndex = i, capturePoint = base.instance},
-                armyKey
-            })
-            task.wait(0.05)
-        end
-        return true
     end
-    
-    local commonCombos = {
-        {"z", "y"}, {"y", "x"}, {"x", "z"}, {"y", "y"}, {"z", "x"}
-    }
-    
-    print("[Map] Brute forcing keys...")
-    for _, combo in ipairs(commonCombos) do
-        local rKey, aKey = combo[1], combo[2]
-        
-        dataRemote:FireServer({
-            {capturePoint = base.instance},
-            rKey
-        })
-        task.wait(0.1)
-        
-        for i = 1, 4 do
-            dataRemote:FireServer({
-                {armyIndex = i, capturePoint = base.instance},
-                aKey
-            })
-            task.wait(0.05)
-        end
-        
-        task.wait(0.2)
-    end
-    
     return true
 end
 
-local PacketDetector = {
-    getKey = function()
-        return _G.DetectedPacketKey or "x"
-    end
-}
-
 -- ===== KING OF THE HILL SYSTEM =====
 local KOTHSystem = {}
-
-function KOTHSystem:getDataRemote()
-    local bridgeNet = game:GetService("ReplicatedStorage")["ncxyzero_bridgenet2-fork@1.1.5"]
-    if not bridgeNet then return nil end
-    return bridgeNet["dataRemoteEvent"]
-end
 
 function KOTHSystem:getKOTHModels()
     local models = {}
@@ -867,53 +646,23 @@ end
 
 function KOTHSystem:deployToKOTH(kothModel)
     if not kothModel or not kothModel.Parent then return false end
-    local dataRemote = self:getDataRemote()
-    if not dataRemote then return false end
-    
-    local rocketKey = _G.DetectedRocketKey
-    local armyKey = _G.DetectedArmyKey
-    
-    if rocketKey and armyKey then
-        dataRemote:FireServer({
-            {capturePoint = kothModel},
-            rocketKey
-        })
+    local ok, GetBridge = pcall(function()
+        return require(ReplicatedStorage.util.GetBridge)
+    end)
+    if not ok or not GetBridge then
+        warn("[KOTH] GetBridge not available: " .. tostring(GetBridge))
+        return false
+    end
+    pcall(function()
+        GetBridge("SendRocketsToPoint"):Fire({capturePoint = kothModel})
+    end)
+    task.wait(0.05)
+    for i = 1, 4 do
+        pcall(function()
+            GetBridge("SendTroopsToPoint"):Fire({armyIndex = i, capturePoint = kothModel})
+        end)
         task.wait(0.05)
-        
-        for i = 1, 4 do
-            dataRemote:FireServer({
-                {armyIndex = i, capturePoint = kothModel},
-                armyKey
-            })
-            task.wait(0.05)
-        end
-        return true
     end
-    
-    local commonCombos = {
-        {"z", "y"}, {"y", "x"}, {"x", "z"}, {"y", "y"}, {"z", "x"}
-    }
-    
-    for _, combo in ipairs(commonCombos) do
-        local rKey, aKey = combo[1], combo[2]
-        
-        dataRemote:FireServer({
-            {capturePoint = kothModel},
-            rKey
-        })
-        task.wait(0.1)
-        
-        for i = 1, 4 do
-            dataRemote:FireServer({
-                {armyIndex = i, capturePoint = kothModel},
-                aKey
-            })
-            task.wait(0.05)
-        end
-        
-        task.wait(0.2)
-    end
-    
     return true
 end
 
@@ -926,6 +675,37 @@ function KOTHSystem:AutoKOTHLoop()
             end
         end
         task.wait(15)
+    end
+end
+
+function KOTHSystem:TownReturnLoop()
+    local hadKOTH = false
+    while State.running do
+        local hasKOTH = false
+        pcall(function()
+            local special = workspace.MilitaryMap.Object.Special
+            for _, child in ipairs(special:GetChildren()) do
+                if child.Name == "KingOfTheHillBase" or child.Name == "ToxicKingOfTheHillBase" then
+                    hasKOTH = true
+                    break
+                end
+            end
+        end)
+        if hadKOTH and not hasKOTH then
+            -- KOTH event ended — recall all forces to town
+            pcall(function()
+                local GetBridge = require(ReplicatedStorage.util.GetBridge)
+                local town = workspace.MilitaryMap.Object.MilitaryTown.Town
+                GetBridge("SendRocketsToPoint"):Fire({capturePoint = town})
+                for i = 1, 4 do
+                    GetBridge("SendTroopsToPoint"):Fire({armyIndex = i, capturePoint = town})
+                    task.wait(0.05)
+                end
+                print("[KOTH] Event ended — all forces recalled to town")
+            end)
+        end
+        hadKOTH = hasKOTH
+        task.wait(10)
     end
 end
 
@@ -978,81 +758,109 @@ function UI:Build()
     local gui = self:Create("ScreenGui", {Name = "ModularShopUI", ResetOnSpawn = false, ZIndexBehavior = Enum.ZIndexBehavior.Sibling, Enabled = true})
     if not gui then return nil end
     gui.Parent = playerGui
-    local mainFrame = self:Create("Frame", {Name = "MainFrame", Size = UDim2.fromOffset(CONFIG.UI.Width, CONFIG.UI.Height), Position = UDim2.new(CONFIG.UI.X, -CONFIG.UI.Width/2, CONFIG.UI.Y, -CONFIG.UI.Height/2), BackgroundColor3 = Color3.fromRGB(10, 8, 5), BackgroundTransparency = 0.45, BorderSizePixel = 0, ClipsDescendants = true, Visible = true})
+    local mainFrame = self:Create("Frame", {Name = "MainFrame", Size = UDim2.fromOffset(CONFIG.UI.Width, CONFIG.UI.Height), Position = UDim2.new(CONFIG.UI.X, -CONFIG.UI.Width/2, CONFIG.UI.Y, -CONFIG.UI.Height/2), BackgroundColor3 = Color3.fromRGB(20, 22, 26), BackgroundTransparency = 0.55, BorderSizePixel = 0, ClipsDescendants = true, Visible = true})
     if not mainFrame then return nil end
     mainFrame.Parent = gui
-    local corner = self:Create("UICorner", {CornerRadius = UDim.new(0, 10)})
+    local corner = self:Create("UICorner", {CornerRadius = UDim.new(0, 4)})
     if corner then corner.Parent = mainFrame end
-    local stroke = self:Create("UIStroke", {Color = Color3.fromRGB(180, 140, 50), Thickness = 1.5})
+    local stroke = self:Create("UIStroke", {Color = Color3.fromRGB(58, 63, 78), Thickness = 1})
     if stroke then stroke.Parent = mainFrame end
 
     -- Header
-    local header = self:Create("Frame", {Name = "Header", Size = UDim2.new(1, 0, 0, 38), BackgroundColor3 = Color3.fromRGB(15, 12, 6), BackgroundTransparency = 0.35, BorderSizePixel = 0})
+    local header = self:Create("Frame", {Name = "Header", Size = UDim2.new(1, 0, 0, 38), BackgroundColor3 = Color3.fromRGB(14, 15, 19), BackgroundTransparency = 0.65, BorderSizePixel = 0})
     if header then header.Parent = mainFrame end
-    local headerCorner = self:Create("UICorner", {CornerRadius = UDim.new(0, 10)})
+    local headerCorner = self:Create("UICorner", {CornerRadius = UDim.new(0, 4)})
     if headerCorner then headerCorner.Parent = header end
-    -- Gold bottom divider line on header
-    local headerLine = self:Create("Frame", {Name = "HeaderLine", Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = Color3.fromRGB(180, 140, 50), BorderSizePixel = 0})
+    -- Subtle bottom divider line on header
+    local headerLine = self:Create("Frame", {Name = "HeaderLine", Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = Color3.fromRGB(52, 57, 70), BorderSizePixel = 0})
     if headerLine then headerLine.Parent = header end
 
-    local title = self:Create("TextLabel", {Name = "Title", Size = UDim2.new(0.6, 0, 1, 0), Position = UDim2.new(0.04, 0, 0, 0), BackgroundTransparency = 1, Text = "⚔ Shop & Collect", TextColor3 = Color3.fromRGB(255, 210, 80), TextSize = 15, Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Left})
+    local title = self:Create("TextLabel", {Name = "Title", Size = UDim2.new(0.6, 0, 1, 0), Position = UDim2.new(0.04, 0, 0, 0), BackgroundTransparency = 1, Text = "⚔ Shop & Collect", TextColor3 = Color3.fromRGB(210, 215, 220), TextSize = 15, Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Left})
     if title then title.Parent = header end
 
-    -- Minimize button (─)
-    local minimizeBtn = self:Create("TextButton", {Name = "MinimizeButton", Size = UDim2.new(0, 28, 0, 26), Position = UDim2.new(1, -68, 0, 6), BackgroundColor3 = Color3.fromRGB(55, 43, 20), BackgroundTransparency = 0.3, Text = "─", TextColor3 = Color3.fromRGB(255, 210, 80), TextSize = 14, Font = Enum.Font.GothamBold})
-    if minimizeBtn then minimizeBtn.Parent = header end
+    -- Minimize button (circle)
+    local minimizeBtn = self:Create("TextButton", {Name = "MinimizeButton", Size = UDim2.new(0, 26, 0, 26), Position = UDim2.new(1, -66, 0, 6), BackgroundColor3 = Color3.fromRGB(38, 42, 52), BackgroundTransparency = 0.65, Text = "─", TextColor3 = Color3.fromRGB(160, 165, 178), TextSize = 12, Font = Enum.Font.GothamBold})
+    if minimizeBtn then
+        minimizeBtn.Parent = header
+        local minBtnCorner = self:Create("UICorner", {CornerRadius = UDim.new(0, 3)})
+        if minBtnCorner then minBtnCorner.Parent = minimizeBtn end
+    end
 
     local closeBtn = self:Create("TextButton", {Name = "CloseButton", Size = UDim2.new(0, 28, 0, 26), Position = UDim2.new(1, -36, 0, 6), BackgroundColor3 = Color3.fromRGB(140, 40, 40), BackgroundTransparency = 0.3, Text = "✕", TextColor3 = Color3.fromRGB(255, 200, 200), TextSize = 13, Font = Enum.Font.GothamBold})
     if closeBtn then closeBtn.Parent = header end
     self:SetupDraggable(mainFrame, header)
 
-    -- Floating mini button (shown when minimized) — positioned dynamically on minimize
-    local miniBtn = self:Create("TextButton", {Name = "MiniOpenButton", Size = UDim2.fromOffset(CONFIG.UI.Width, 32), Position = UDim2.new(CONFIG.UI.X, -CONFIG.UI.Width/2, CONFIG.UI.Y, -CONFIG.UI.Height/2), BackgroundColor3 = Color3.fromRGB(10, 8, 5), BackgroundTransparency = 0.35, Text = "⚔ MiniWars  |  Open", TextColor3 = Color3.fromRGB(255, 210, 80), TextSize = 13, Font = Enum.Font.GothamBold, Visible = false})
-    if miniBtn then miniBtn.Parent = gui end
+    -- Floating mini button (shown when minimized) — small square with tiny rounding, snaps to minimize btn position
+    local miniBtn = self:Create("TextButton", {Name = "MiniOpenButton", Size = UDim2.fromOffset(60, 60), Position = UDim2.new(0, 0, 0, 0), BackgroundColor3 = Color3.fromRGB(20, 22, 26), BackgroundTransparency = 0.65, Text = "⚔", TextColor3 = Color3.fromRGB(190, 195, 210), TextSize = 26, Font = Enum.Font.GothamBold, Visible = false})
+    if miniBtn then
+        miniBtn.Parent = gui
+        local miniCorner = self:Create("UICorner", {CornerRadius = UDim.new(0, 3)})
+        if miniCorner then miniCorner.Parent = miniBtn end
+        local miniStroke = self:Create("UIStroke", {Color = Color3.fromRGB(58, 63, 78), Thickness = 1})
+        if miniStroke then miniStroke.Parent = miniBtn end
+    end
 
     -- Tab container: 3 tabs (Shop, Black Market, Base Map) + search box
-    local tabContainer = self:Create("Frame", {Name = "TabContainer", Size = UDim2.new(1, 0, 0, 34), Position = UDim2.new(0, 0, 0, 38), BackgroundColor3 = Color3.fromRGB(10, 8, 5), BackgroundTransparency = 0.45, BorderSizePixel = 0})
+    local tabContainer = self:Create("Frame", {Name = "TabContainer", Size = UDim2.new(1, 0, 0, 34), Position = UDim2.new(0, 0, 0, 38), BackgroundColor3 = Color3.fromRGB(16, 18, 22), BackgroundTransparency = 0.88, BorderSizePixel = 0})
     if tabContainer then tabContainer.Parent = mainFrame end
 
-    local shopTab = self:Create("TextButton", {Name = "ShopTab", Size = UDim2.new(0.22, 0, 1, 0), Position = UDim2.new(0, 0, 0, 0), BackgroundColor3 = Color3.fromRGB(55, 43, 20), Text = "Shop", TextColor3 = Color3.fromRGB(255, 210, 80), TextSize = 13, Font = Enum.Font.GothamSemibold})
-    if shopTab then shopTab.Parent = tabContainer end
+    local shopTab = self:Create("TextButton", {Name = "ShopTab", Size = UDim2.new(0.22, -2, 0, 26), Position = UDim2.new(0, 2, 0, 4), BackgroundColor3 = Color3.fromRGB(46, 50, 62), BackgroundTransparency = 0.92, Text = "Shop", TextColor3 = Color3.fromRGB(210, 215, 220), TextSize = 13, Font = Enum.Font.GothamSemibold})
+    if shopTab then
+        shopTab.Parent = tabContainer
+        local c = self:Create("UICorner", {CornerRadius = UDim.new(0, 3)}) if c then c.Parent = shopTab end
+    end
 
-    local blackMarketTab = self:Create("TextButton", {Name = "BlackMarketTab", Size = UDim2.new(0.22, 0, 1, 0), Position = UDim2.new(0.22, 0, 0, 0), BackgroundColor3 = Color3.fromRGB(35, 28, 14), Text = "Black Market", TextColor3 = Color3.fromRGB(170, 135, 50), TextSize = 11, Font = Enum.Font.GothamSemibold})
-    if blackMarketTab then blackMarketTab.Parent = tabContainer end
+    local blackMarketTab = self:Create("TextButton", {Name = "BlackMarketTab", Size = UDim2.new(0.22, -2, 0, 26), Position = UDim2.new(0.22, 2, 0, 4), BackgroundColor3 = Color3.fromRGB(28, 30, 38), BackgroundTransparency = 0.92, Text = "Black Market", TextColor3 = Color3.fromRGB(130, 135, 150), TextSize = 11, Font = Enum.Font.GothamSemibold})
+    if blackMarketTab then
+        blackMarketTab.Parent = tabContainer
+        local c = self:Create("UICorner", {CornerRadius = UDim.new(0, 3)}) if c then c.Parent = blackMarketTab end
+    end
 
-    local mapTab = self:Create("TextButton", {Name = "MapTab", Size = UDim2.new(0.22, 0, 1, 0), Position = UDim2.new(0.44, 0, 0, 0), BackgroundColor3 = Color3.fromRGB(35, 28, 14), Text = "Base Map", TextColor3 = Color3.fromRGB(170, 155, 120), TextSize = 13, Font = Enum.Font.GothamSemibold})
-    if mapTab then mapTab.Parent = tabContainer end
+    local mapTab = self:Create("TextButton", {Name = "MapTab", Size = UDim2.new(0.22, -2, 0, 26), Position = UDim2.new(0.44, 2, 0, 4), BackgroundColor3 = Color3.fromRGB(28, 30, 38), BackgroundTransparency = 0.92, Text = "Base Map", TextColor3 = Color3.fromRGB(130, 135, 150), TextSize = 13, Font = Enum.Font.GothamSemibold})
+    if mapTab then
+        mapTab.Parent = tabContainer
+        local c = self:Create("UICorner", {CornerRadius = UDim.new(0, 3)}) if c then c.Parent = mapTab end
+    end
 
-    local searchBox = self:Create("TextBox", {Name = "SearchBox", Size = UDim2.new(0.31, -10, 0.76, 0), Position = UDim2.new(0.68, 5, 0.12, 0), BackgroundColor3 = Color3.fromRGB(25, 20, 10), BackgroundTransparency = 0.35, Text = "", PlaceholderText = "🔍 Search...", TextColor3 = Color3.fromRGB(240, 225, 190), PlaceholderColor3 = Color3.fromRGB(130, 110, 75), TextSize = 12, Font = Enum.Font.Gotham, ClearTextOnFocus = false})
-    if searchBox then searchBox.Parent = tabContainer end
+    local searchBox = self:Create("TextBox", {Name = "SearchBox", Size = UDim2.new(0.31, -10, 0, 24), Position = UDim2.new(0.68, 5, 0, 5), BackgroundColor3 = Color3.fromRGB(26, 28, 35), BackgroundTransparency = 0.80, Text = "", PlaceholderText = "🔍 Search...", TextColor3 = Color3.fromRGB(200, 205, 215), PlaceholderColor3 = Color3.fromRGB(85, 90, 108), TextSize = 12, Font = Enum.Font.Gotham, ClearTextOnFocus = false})
+    if searchBox then
+        searchBox.Parent = tabContainer
+        local c = self:Create("UICorner", {CornerRadius = UDim.new(0, 3)}) if c then c.Parent = searchBox end
+    end
 
-    local controlsContainer = self:Create("Frame", {Name = "ControlsContainer", Size = UDim2.new(1, 0, 0, 34), Position = UDim2.new(0, 0, 0, 72), BackgroundColor3 = Color3.fromRGB(10, 8, 5), BackgroundTransparency = 0.45, BorderSizePixel = 0})
+    local controlsContainer = self:Create("Frame", {Name = "ControlsContainer", Size = UDim2.new(1, 0, 0, 34), Position = UDim2.new(0, 0, 0, 72), BackgroundColor3 = Color3.fromRGB(16, 18, 22), BackgroundTransparency = 0.80, BorderSizePixel = 0})
     if controlsContainer then controlsContainer.Parent = mainFrame end
 
     local function makeToggle(name, pos, text, color)
-        local btn = self:Create("TextButton", {Name = name, Size = UDim2.new(0, 100, 0, 24), Position = pos, BackgroundColor3 = color, BackgroundTransparency = 0.25, Text = text, TextColor3 = Color3.fromRGB(255, 255, 255), TextSize = 10, Font = Enum.Font.GothamSemibold})
-        if btn then btn.Parent = controlsContainer end
+        local btn = self:Create("TextButton", {Name = name, Size = UDim2.new(0, 100, 0, 24), Position = pos, BackgroundColor3 = color, BackgroundTransparency = 0.40, Text = text, TextColor3 = Color3.fromRGB(255, 255, 255), TextSize = 10, Font = Enum.Font.GothamSemibold})
+        if btn then
+            btn.Parent = controlsContainer
+            local c = self:Create("UICorner", {CornerRadius = UDim.new(0, 3)}) if c then c.Parent = btn end
+        end
         return btn
     end
 
-    local refreshToggle = makeToggle("RefreshToggle", UDim2.new(0, 8, 0, 5), "Auto Refresh: ON", Color3.fromRGB(55, 140, 80))
-    local buyToggle    = makeToggle("BuyToggle",     UDim2.new(0, 115, 0, 5), "Auto Buy: OFF",    Color3.fromRGB(140, 50, 50))
-    local collectToggle= makeToggle("CollectToggle",  UDim2.new(0, 222, 0, 5), "Auto Collect: OFF",Color3.fromRGB(140, 50, 50))
+    local refreshToggle = makeToggle("RefreshToggle", UDim2.new(0, 8, 0, 5), "Auto Refresh: ON", Color3.fromRGB(42, 118, 62))
+    local buyToggle    = makeToggle("BuyToggle",     UDim2.new(0, 115, 0, 5), "Auto Buy: OFF",    Color3.fromRGB(100, 32, 32))
+    local collectToggle= makeToggle("CollectToggle",  UDim2.new(0, 222, 0, 5), "Auto Collect: OFF",Color3.fromRGB(100, 32, 32))
 
     local function makeSmallBtn(name, pos, text)
-        local btn = self:Create("TextButton", {Name = name, Size = UDim2.new(0, 58, 0, 24), Position = pos, BackgroundColor3 = Color3.fromRGB(50, 40, 18), BackgroundTransparency = 0.25, Text = text, TextColor3 = Color3.fromRGB(255, 210, 80), TextSize = 11, Font = Enum.Font.GothamSemibold})
-        if btn then btn.Parent = controlsContainer end
+        local btn = self:Create("TextButton", {Name = name, Size = UDim2.new(0, 58, 0, 24), Position = pos, BackgroundColor3 = Color3.fromRGB(36, 40, 50), BackgroundTransparency = 0.55, Text = text, TextColor3 = Color3.fromRGB(185, 190, 205), TextSize = 11, Font = Enum.Font.GothamSemibold})
+        if btn then
+            btn.Parent = controlsContainer
+            local c = self:Create("UICorner", {CornerRadius = UDim.new(0, 3)}) if c then c.Parent = btn end
+        end
         return btn
     end
     local saveBtn = makeSmallBtn("SaveButton", UDim2.new(1, -126, 0, 5), "Save")
     local loadBtn = makeSmallBtn("LoadButton", UDim2.new(1, -63, 0, 5),  "Load")
 
     -- Gold divider under controls
-    local ctrlLine = self:Create("Frame", {Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = Color3.fromRGB(100, 78, 28), BorderSizePixel = 0})
+    local ctrlLine = self:Create("Frame", {Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = Color3.fromRGB(48, 53, 66), BorderSizePixel = 0})
     if ctrlLine then ctrlLine.Parent = controlsContainer end
 
     -- Shop / Black Market List Container (shared scrolling list)
-    local listContainer = self:Create("ScrollingFrame", {Name = "ListContainer", Size = UDim2.new(1, -16, 1, -(38 + 34 + 34 + 12)), Position = UDim2.new(0, 8, 0, 110), BackgroundColor3 = Color3.fromRGB(8, 6, 3), BackgroundTransparency = 0.5, BorderSizePixel = 0, ScrollBarThickness = 3, ScrollBarImageColor3 = Color3.fromRGB(180, 140, 50), AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = UDim2.new(0, 0, 0, 0)})
+    local listContainer = self:Create("ScrollingFrame", {Name = "ListContainer", Size = UDim2.new(1, -16, 1, -(38 + 34 + 34 + 12)), Position = UDim2.new(0, 8, 0, 110), BackgroundColor3 = Color3.fromRGB(12, 13, 17), BackgroundTransparency = 0.40, BorderSizePixel = 0, ScrollBarThickness = 3, ScrollBarImageColor3 = Color3.fromRGB(72, 78, 98), AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = UDim2.new(0, 0, 0, 0)})
     if listContainer then listContainer.Parent = mainFrame end
     local listLayout = self:Create("UIListLayout", {Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder})
     if listLayout then listLayout.Parent = listContainer end
@@ -1062,7 +870,7 @@ function UI:Build()
         Name = "BMInactiveOverlay",
         Size = UDim2.new(1, -16, 1, -(38 + 34 + 34 + 12)),
         Position = UDim2.new(0, 8, 0, 110),
-        BackgroundColor3 = Color3.fromRGB(18, 10, 10),
+        BackgroundColor3 = Color3.fromRGB(12, 12, 18),
         BackgroundTransparency = 0.15,
         BorderSizePixel = 0,
         ClipsDescendants = true,
@@ -1103,7 +911,7 @@ function UI:Build()
     end
 
     -- Map Container (hidden by default)
-    local mapContainer = self:Create("Frame", {Name = "MapContainer", Size = UDim2.new(1, -16, 1, -(38 + 34 + 34 + 12)), Position = UDim2.new(0, 8, 0, 110), BackgroundColor3 = Color3.fromRGB(8, 6, 3), BackgroundTransparency = 0.5, BorderSizePixel = 0, ClipsDescendants = true, Visible = false})
+    local mapContainer = self:Create("Frame", {Name = "MapContainer", Size = UDim2.new(1, -16, 1, -(38 + 34 + 34 + 12)), Position = UDim2.new(0, 8, 0, 110), BackgroundColor3 = Color3.fromRGB(12, 13, 17), BackgroundTransparency = 0.40, BorderSizePixel = 0, ClipsDescendants = true, Visible = false})
     if mapContainer then mapContainer.Parent = mainFrame end
     
     -- Map grid pattern
@@ -1136,7 +944,7 @@ function UI:Build()
         Name = "MapZoomOut",
         Size = UDim2.new(0, 30, 0, 25),
         Position = UDim2.new(0, 5, 0, 5),
-        BackgroundColor3 = Color3.fromRGB(60, 60, 80),
+        BackgroundColor3 = Color3.fromRGB(38, 42, 54),
         Text = "-",
         TextColor3 = Color3.fromRGB(255, 255, 255),
         TextSize = 18,
@@ -1162,7 +970,7 @@ function UI:Build()
         Name = "MapZoomIn",
         Size = UDim2.new(0, 30, 0, 25),
         Position = UDim2.new(0, 95, 0, 5),
-        BackgroundColor3 = Color3.fromRGB(60, 60, 80),
+        BackgroundColor3 = Color3.fromRGB(38, 42, 54),
         Text = "+",
         TextColor3 = Color3.fromRGB(255, 255, 255),
         TextSize = 18,
@@ -1175,7 +983,7 @@ function UI:Build()
         Name = "MapResetBtn",
         Size = UDim2.new(0, 50, 0, 25),
         Position = UDim2.new(0, 130, 0, 5),
-        BackgroundColor3 = Color3.fromRGB(80, 80, 120),
+        BackgroundColor3 = Color3.fromRGB(38, 42, 54),
         Text = "Reset",
         TextColor3 = Color3.fromRGB(255, 255, 255),
         TextSize = 11,
@@ -1189,7 +997,7 @@ function UI:Build()
         Name = "MapLegend",
         Size = UDim2.new(1, -10, 0, 30),
         Position = UDim2.new(0, 5, 1, -35),
-        BackgroundColor3 = Color3.fromRGB(30, 30, 40),
+        BackgroundColor3 = Color3.fromRGB(18, 20, 26),
         BorderSizePixel = 0,
         Visible = false,
     })
@@ -1288,59 +1096,52 @@ function UI:Build()
         Name = "KOTHPanel",
         Size = UDim2.new(0, 140, 0, 45),
         Position = UDim2.new(0, 5, 0, 35),
-        BackgroundColor3 = Color3.fromRGB(30, 30, 40),
+        BackgroundColor3 = Color3.fromRGB(16, 18, 24),
+        BackgroundTransparency = 0.20,
         BorderSizePixel = 0,
         Visible = false,
     })
-    if kothPanel then
-        kothPanel.Parent = mapContainer
-        local kpCorner = self:Create("UICorner", {CornerRadius = UDim.new(0, 6)})
-        if kpCorner then kpCorner.Parent = kothPanel end
-        local kpStroke = self:Create("UIStroke", {Color = Color3.fromRGB(255, 180, 80), Thickness = 1})
-        if kpStroke then kpStroke.Parent = kothPanel end
-    end
-    
+    if kothPanel then kothPanel.Parent = mapContainer end
+
     local kothTitle = self:Create("TextLabel", {
         Name = "KOTHTitle",
         Size = UDim2.new(1, 0, 0, 18),
         BackgroundTransparency = 1,
         Text = "Auto Deploy",
-        TextColor3 = Color3.fromRGB(255, 180, 80),
+        TextColor3 = Color3.fromRGB(180, 185, 200),
         TextSize = 11,
         Font = Enum.Font.GothamBold,
     })
     if kothTitle then kothTitle.Parent = kothPanel end
-    
+
     local autoKOTHToggle = self:Create("TextButton", {
         Name = "AutoKOTHToggle",
         Size = UDim2.new(1, -10, 0, 22),
         Position = UDim2.new(0, 5, 0, 22),
-        BackgroundColor3 = State.autoKOTH and Color3.fromRGB(80, 200, 120) or Color3.fromRGB(200, 80, 80),
+        BackgroundColor3 = State.autoKOTH and Color3.fromRGB(42, 118, 62) or Color3.fromRGB(100, 32, 32),
+        BackgroundTransparency = 0.25,
         Text = State.autoKOTH and "Auto Deploy: ON" or "Auto Deploy: OFF",
         TextColor3 = Color3.fromRGB(255, 255, 255),
         TextSize = 10,
         Font = Enum.Font.GothamSemibold,
     })
-    if autoKOTHToggle then
-        autoKOTHToggle.Parent = kothPanel
-        local kbCorner = self:Create("UICorner", {CornerRadius = UDim.new(0, 4)})
-        if kbCorner then kbCorner.Parent = autoKOTHToggle end
-    end
+    if autoKOTHToggle then autoKOTHToggle.Parent = kothPanel end
+
 
     -- Shop header row (inside listContainer, applies to both Shop and Black Market)
-    local headerRow = self:Create("Frame", {Name = "HeaderRow", Size = UDim2.new(1, -10, 0, 24), BackgroundColor3 = Color3.fromRGB(45, 35, 16), BorderSizePixel = 0})
+    local headerRow = self:Create("Frame", {Name = "HeaderRow", Size = UDim2.new(1, -10, 0, 24), BackgroundColor3 = Color3.fromRGB(26, 28, 36), BorderSizePixel = 0})
     if headerRow then
         headerRow.Parent = listContainer
         local hrCorner = self:Create("UICorner", {CornerRadius = UDim.new(0, 5)})
         if hrCorner then hrCorner.Parent = headerRow end
-        local hrStroke = self:Create("UIStroke", {Color = Color3.fromRGB(120, 90, 30), Thickness = 1})
+        local hrStroke = self:Create("UIStroke", {Color = Color3.fromRGB(50, 55, 68), Thickness = 1})
         if hrStroke then hrStroke.Parent = headerRow end
     end
     local headers = {"Item Name", "Stock", "Price", "Rarity", "AutoBuy"}
     local widths = {0.35, 0.15, 0.2, 0.15, 0.15}
     local offset = 0
     for i, headerText in ipairs(headers) do
-        local label = self:Create("TextLabel", {Size = UDim2.new(widths[i], -4, 1, 0), Position = UDim2.new(offset, 2, 0, 0), BackgroundTransparency = 1, Text = headerText, TextColor3 = Color3.fromRGB(255, 210, 80), TextSize = 11, Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Left})
+        local label = self:Create("TextLabel", {Size = UDim2.new(widths[i], -4, 1, 0), Position = UDim2.new(offset, 2, 0, 0), BackgroundTransparency = 1, Text = headerText, TextColor3 = Color3.fromRGB(145, 150, 168), TextSize = 11, Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Left})
         if label then label.Parent = headerRow end
         offset = offset + widths[i]
     end
@@ -1365,8 +1166,8 @@ end
 function UI:CreateItemRow(item, index)
     local container = State.uiElements.listContainer
     if not container then return nil end
-    local rowBg = index % 2 == 0 and Color3.fromRGB(38, 30, 15) or Color3.fromRGB(28, 22, 11)
-    local row = self:Create("Frame", {Name = "Item_" .. item.name:gsub("[^%w]", "_"), Size = UDim2.new(1, -10, 0, 28), BackgroundColor3 = rowBg, BorderSizePixel = 0, LayoutOrder = index})
+    local rowBg = index % 2 == 0 and Color3.fromRGB(30, 33, 42) or Color3.fromRGB(22, 24, 31)
+    local row = self:Create("Frame", {Name = "Item_" .. item.name:gsub("[^%w]", "_"), Size = UDim2.new(1, -10, 0, 28), BackgroundColor3 = rowBg, BackgroundTransparency = 0.72, BorderSizePixel = 0, LayoutOrder = index})
     if not row then return nil end
     row.Parent = container
     local rowCorner = self:Create("UICorner", {CornerRadius = UDim.new(0, 5)})
@@ -1375,23 +1176,23 @@ function UI:CreateItemRow(item, index)
     local offset = 0
     local values = {item.name, item.stock, item.priceFormatted, item.rarity}
     for i = 1, 4 do
-        local textColor = i == 4 and Utility:GetRarityColor(item.rarity) or (i == 1 and Color3.fromRGB(235, 220, 185) or Color3.fromRGB(180, 165, 130))
+        local textColor = i == 4 and Utility:GetRarityColor(item.rarity) or (i == 1 and Color3.fromRGB(205, 210, 218) or Color3.fromRGB(148, 153, 168))
         local label = self:Create("TextLabel", {Size = UDim2.new(widths[i], -4, 1, 0), Position = UDim2.new(offset, 2, 0, 0), BackgroundTransparency = 1, Text = values[i], TextColor3 = textColor, TextSize = 11, Font = i == 1 and Enum.Font.GothamSemibold or Enum.Font.Gotham, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd})
         if label then label.Parent = row end
         offset = offset + widths[i]
     end
-    local checkbox = self:Create("TextButton", {Name = "AutoBuyCheckbox", Size = UDim2.new(widths[5], -8, 0.68, 0), Position = UDim2.new(offset, 4, 0.16, 0), BackgroundColor3 = item.selected and Color3.fromRGB(45, 120, 65) or Color3.fromRGB(45, 35, 16), Text = item.selected and "✓" or "", TextColor3 = Color3.fromRGB(255, 220, 100), TextSize = 13, Font = Enum.Font.GothamBold})
+    local checkbox = self:Create("TextButton", {Name = "AutoBuyCheckbox", Size = UDim2.new(widths[5], -8, 0.68, 0), Position = UDim2.new(offset, 4, 0.16, 0), BackgroundColor3 = item.selected and Color3.fromRGB(42, 118, 62) or Color3.fromRGB(32, 35, 45), Text = item.selected and "✓" or "", TextColor3 = Color3.fromRGB(180, 225, 185), TextSize = 13, Font = Enum.Font.GothamBold})
     if checkbox then
         checkbox.Parent = row
         local cbCorner = self:Create("UICorner", {CornerRadius = UDim.new(0, 4)})
         if cbCorner then cbCorner.Parent = checkbox end
-        local cbStroke = self:Create("UIStroke", {Color = Color3.fromRGB(120, 90, 30), Thickness = 1})
+        local cbStroke = self:Create("UIStroke", {Color = Color3.fromRGB(55, 60, 76), Thickness = 1})
         if cbStroke then cbStroke.Parent = checkbox end
         checkbox.MouseButton1Click:Connect(function()
             item.selected = not item.selected
             State.autoBuySelections[item.name] = item.selected
             checkbox.Text = item.selected and "✓" or ""
-            checkbox.BackgroundColor3 = item.selected and Color3.fromRGB(45, 120, 65) or Color3.fromRGB(45, 35, 16)
+            checkbox.BackgroundColor3 = item.selected and Color3.fromRGB(42, 118, 62) or Color3.fromRGB(32, 35, 45)
         end)
     end
     return row
@@ -1551,28 +1352,29 @@ end
 
 function UI:UpdateTabColors()
     if not State.uiElements.shopTab then return end
-    local activeColor   = Color3.fromRGB(55, 43, 20)
-    local inactiveColor = Color3.fromRGB(30, 24, 12)
-    local activeText    = Color3.fromRGB(255, 210, 80)
-    local inactiveText  = Color3.fromRGB(140, 118, 70)
+    -- Active tab is slightly more visible; inactive stays near-invisible
+    local activeTransp   = 0.75
+    local inactiveTransp = 0.92
+    local activeText    = Color3.fromRGB(210, 215, 220)
+    local inactiveText  = Color3.fromRGB(100, 105, 122)
 
-    State.uiElements.shopTab.BackgroundColor3 = State.currentTab == "Shop" and activeColor or inactiveColor
-    State.uiElements.shopTab.TextColor3       = State.currentTab == "Shop" and activeText  or inactiveText
+    State.uiElements.shopTab.BackgroundTransparency = State.currentTab == "Shop" and activeTransp or inactiveTransp
+    State.uiElements.shopTab.TextColor3             = State.currentTab == "Shop" and activeText  or inactiveText
 
     if State.uiElements.blackMarketTab then
-        State.uiElements.blackMarketTab.BackgroundColor3 = State.currentTab == "BlackMarket" and activeColor or inactiveColor
-        State.uiElements.blackMarketTab.TextColor3       = State.currentTab == "BlackMarket" and activeText  or inactiveText
+        State.uiElements.blackMarketTab.BackgroundTransparency = State.currentTab == "BlackMarket" and activeTransp or inactiveTransp
+        State.uiElements.blackMarketTab.TextColor3             = State.currentTab == "BlackMarket" and activeText  or inactiveText
     end
     if State.uiElements.mapTab then
-        State.uiElements.mapTab.BackgroundColor3 = State.currentTab == "Map" and activeColor or inactiveColor
-        State.uiElements.mapTab.TextColor3       = State.currentTab == "Map" and activeText  or inactiveText
+        State.uiElements.mapTab.BackgroundTransparency = State.currentTab == "Map" and activeTransp or inactiveTransp
+        State.uiElements.mapTab.TextColor3             = State.currentTab == "Map" and activeText  or inactiveText
     end
 end
 
 function UI:UpdateToggleColors()
     if not State.uiElements.refreshToggle then return end
-    local onColor  = Color3.fromRGB(45, 120, 65)
-    local offColor = Color3.fromRGB(120, 40, 40)
+    local onColor  = Color3.fromRGB(42, 118, 62)
+    local offColor = Color3.fromRGB(100, 32, 32)
 
     State.uiElements.refreshToggle.BackgroundColor3 = State.autoRefresh and onColor or offColor
     State.uiElements.refreshToggle.Text = State.autoRefresh and "Auto Refresh: ON" or "Auto Refresh: OFF"
@@ -1701,7 +1503,7 @@ function UI:ShowMap()
     if State.uiElements.bmInactiveOverlay then
         State.uiElements.bmInactiveOverlay.Visible = false
     end
-    
+
     local bases = MapSystem:scanBases()
     UI:UpdateMap(bases)
 end
@@ -1733,15 +1535,16 @@ function EventHandlers:Setup()
             UI:Destroy()
         end))
     end
-    -- Minimize: position miniBtn at mainFrame's current screen location, then hide frame
+    -- Minimize: snap mini button to where the minimize button is on screen, then hide main frame
     if elems.minimizeBtn then
         table.insert(State.connections, elems.minimizeBtn.MouseButton1Click:Connect(function()
             local mf = elems.mainFrame
             local mb = elems.miniBtn
-            if mf and mb then
-                -- Snap mini button to where the main frame currently sits
-                mb.Position = UDim2.fromOffset(mf.AbsolutePosition.X, mf.AbsolutePosition.Y)
-                mb.Size = UDim2.fromOffset(mf.AbsoluteSize.X, 32)
+            local minBtn = elems.minimizeBtn
+            if mf and mb and minBtn then
+                -- Position the mini button exactly where the minimize button is on screen
+                local absPos = minBtn.AbsolutePosition
+                mb.Position = UDim2.fromOffset(absPos.X, absPos.Y)
                 mf.Visible = false
                 mb.Visible = true
             end
@@ -1864,6 +1667,7 @@ function EventHandlers:Setup()
             print("[KOTH] Auto Deploy: " .. tostring(State.autoKOTH))
         end))
     end
+
     
     -- Map panning
     if elems.mapContainer then
@@ -1894,9 +1698,21 @@ function EventHandlers:Setup()
         table.insert(State.connections, inputChanged)
         table.insert(State.connections, inputEnded)
         
+        -- Track hover state for zoom gating
+        local hoverEnter = mapContainer.MouseEnter:Connect(function()
+            State.mapHovered = true
+        end)
+        local hoverLeave = mapContainer.MouseLeave:Connect(function()
+            State.mapHovered = false
+        end)
+        table.insert(State.connections, hoverEnter)
+        table.insert(State.connections, hoverLeave)
+
         pcall(function()
             local wheelConn = game:GetService("UserInputService").InputChanged:Connect(function(input)
-                if input.UserInputType == Enum.UserInputType.MouseWheel and State.currentTab == "Map" then
+                if input.UserInputType == Enum.UserInputType.MouseWheel
+                    and State.currentTab == "Map"
+                    and State.mapHovered then
                     if input.Position.Z > 0 then
                         State.mapZoom = math.min(State.mapZoom + CONFIG.ZoomStep, CONFIG.MaxZoom)
                     else
@@ -1960,7 +1776,7 @@ function MainLoop:StartAutoBuyLoop()
             if State.autoBuy then
                 PurchaseSystem:AutoBuy()
             end
-            task.wait(0.25)
+            task.wait(1)
         end
     end)
     table.insert(State.threads, thread)
@@ -1984,6 +1800,10 @@ function MainLoop:StartKOTHLoops()
         KOTHSystem:AutoKOTHLoop()
     end)
     table.insert(State.threads, kothThread)
+    local townThread = task.spawn(function()
+        KOTHSystem:TownReturnLoop()
+    end)
+    table.insert(State.threads, townThread)
 end
 
 function MainLoop:StartAutoSaveLoop()
@@ -2027,6 +1847,17 @@ local function Initialize()
         local thread = task.spawn(CollectSystem.CollectLoop, CollectSystem)
         table.insert(State.threads, thread)
     end
+    -- Auto-execute: send all forces to town immediately on script load
+    pcall(function()
+        local GetBridge = require(ReplicatedStorage.util.GetBridge)
+        local town = workspace.MilitaryMap.Object.MilitaryTown.Town
+        GetBridge("SendRocketsToPoint"):Fire({capturePoint = town})
+        for i = 1, 4 do
+            GetBridge("SendTroopsToPoint"):Fire({armyIndex = i, capturePoint = town})
+            task.wait(0.05)
+        end
+        print("[Init] All forces sent to town")
+    end)
     print("Shop & Base Map Manager loaded!")
 end
 
