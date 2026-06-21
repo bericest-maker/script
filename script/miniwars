@@ -51,8 +51,8 @@ end
 
 local CONFIG = {
     SaveKey = "ShopAutoBuy_SaveData_v19",
-    RefreshInterval = 2,
-    BuyCooldown = 2,
+    RefreshInterval = 5,
+    BuyCooldown = 0,
     KOTHDeployInterval = 3,
     AutoSaveInterval = 5,
     UI = {
@@ -472,7 +472,7 @@ function PurchaseSystem:BuyItem(itemName)
 
     if success then
         State.lastBuyTime = tick()
-        task.wait(0.5)
+        task.wait(0.1)
     end
 
     return success
@@ -1776,7 +1776,7 @@ function MainLoop:StartAutoBuyLoop()
             if State.autoBuy then
                 PurchaseSystem:AutoBuy()
             end
-            task.wait(1)
+            task.wait(0.075)
         end
     end)
     table.insert(State.threads, thread)
