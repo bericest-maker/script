@@ -51,8 +51,8 @@ end
 
 local CONFIG = {
     SaveKey = "ShopAutoBuy_SaveData_v19",
-    RefreshInterval = 5,
-    BuyCooldown = 0,
+    RefreshInterval = 2,
+    BuyCooldown = 0.2,
     KOTHDeployInterval = 3,
     AutoSaveInterval = 5,
     UI = {
@@ -400,99 +400,52 @@ function PurchaseSystem:FindLiveBuyButton(itemName)
 end
 
 function PurchaseSystem:BuyItem(itemName)
-    local now = tick()
-    if now - State.lastBuyTime < CONFIG.BuyCooldown then
+    local liveBtn = self:FindLiveBuyButton(itemName)
+    if not liveBtn then
+        print("[AutoBuy] No live buy button found for: " .. itemName)
         return false
     end
-
-    local items = ShopData:GetCurrentItems()
-    local targetItem = nil
-    for _, item in ipairs(items) do
-        if item.name == itemName then
-            targetItem = item
-            break
-        end
-    end
-
-    if not targetItem then
-        print("[AutoBuy] Item not in list: " .. itemName)
+    if not firesignal then
+        print("[AutoBuy] firesignal not available")
         return false
     end
-    if not targetItem.hasStock then
-        print("[AutoBuy] Item out of stock: " .. itemName)
-        return false
-    end
-
-    local isBlackMarket = State.currentTab == "BlackMarket"
-    local success = false
-
-    -- PRIMARY: GetBridge (reliable server-side purchase)
-    local bridgeOk, bridgeErr = pcall(function()
-        local GetBridge = require(ReplicatedStorage.util.GetBridge)
-        if isBlackMarket then
-            GetBridge("BuyFromBlackMarketShop"):Fire({
-                shop = "BlackMarket",
-                item = itemName,
-            })
-        else
-            GetBridge("BuyFromShop"):Fire({
-                shop = targetItem.category or "Farm",
-                item = itemName,
-            })
-        end
-    end)
-
-    if bridgeOk then
-        success = true
-        print("[AutoBuy] GetBridge purchase: " .. itemName .. (isBlackMarket and " (BlackMarket)" or " (" .. (targetItem.category or "?") .. ")"))
-    else
-        warn("[AutoBuy] GetBridge failed (" .. tostring(bridgeErr) .. "), falling back to firesignal")
-    end
-
-    -- FALLBACK: firesignal on the live UI button
-    if not success and firesignal then
-        local liveBtn = self:FindLiveBuyButton(itemName)
-        if liveBtn then
-            local downEvent = liveBtn.MouseButton1Down
-            if downEvent and typeof(downEvent) == "RBXScriptSignal" then
-                firesignal(downEvent)
-                task.wait(0.05)
-                local upEvent = liveBtn.MouseButton1Up
-                if upEvent and typeof(upEvent) == "RBXScriptSignal" then firesignal(upEvent) end
-                task.wait(0.05)
-                local clickEvent = liveBtn.MouseButton1Click
-                if clickEvent and typeof(clickEvent) == "RBXScriptSignal" then firesignal(clickEvent) end
-                success = true
-                print("[AutoBuy] firesignal fallback: " .. itemName)
-            end
-        else
-            print("[AutoBuy] No live buy button found for: " .. itemName)
-        end
-    end
-
-    if success then
-        State.lastBuyTime = tick()
-        task.wait(0.1)
-    end
-
-    return success
+    local downEvent = liveBtn.MouseButton1Down
+    if downEvent and typeof(downEvent) == "RBXScriptSignal" then firesignal(downEvent) end
+    task.wait(0.05)
+    local upEvent = liveBtn.MouseButton1Up
+    if upEvent and typeof(upEvent) == "RBXScriptSignal" then firesignal(upEvent) end
+    task.wait(0.05)
+    local clickEvent = liveBtn.MouseButton1Click
+    if clickEvent and typeof(clickEvent) == "RBXScriptSignal" then firesignal(clickEvent) end
+    print("[AutoBuy] firesignal: " .. itemName)
+    return true
 end
 
 function PurchaseSystem:AutoBuy()
     if not State.autoBuy then return end
     local items = ShopData:GetCurrentItems()
-
     print("[AutoBuy] Starting. Items: " .. #items)
 
+    -- Collect all items that need buying
+    local toBuy = {}
     for _, item in ipairs(items) do
         if State.autoBuySelections[item.name] and item.hasStock then
-            print("[AutoBuy] Trying: " .. item.name)
-            local bought = self:BuyItem(item.name)
-            if bought then
-                task.wait(CONFIG.BuyCooldown)
-            end
+            table.insert(toBuy, item)
         end
     end
+
+    -- Fire all purchases in parallel simultaneously
+    local done = 0
+    for _, item in ipairs(toBuy) do
+        task.spawn(function()
+            print("[AutoBuy] Spawning buy: " .. item.name)
+            self:BuyItem(item.name)
+            done = done + 1
+        end)
+    end
+
+    -- Small wait so parallel fires have time to land before next AutoBuy cycle
+    task.wait(CONFIG.BuyCooldown)
 end
 
 local CollectSystem = {}
@@ -511,13 +464,10 @@ function CollectSystem:GetTargetPriority(building, prompt, hrp)
     return {building = building, prompt = prompt, pos = pos, value = amount, gem = isGemMine, dist = (pos - hrp.Position).Magnitude}
 end
 
-function CollectSystem:GetBestTargets(plot, hrp)
-    if not plot then return {} end
-    
+function CollectSystem:GetBestTargets(hrp)
+    -- Scan ALL ProximityPrompts in workspace — server enforces ownership, so safe to attempt any
     local targets = {}
-    
-    -- Scan your plot's descendants for ProximityPrompts
-    for _, desc in ipairs(plot:GetDescendants()) do
+    for _, desc in ipairs(workspace:GetDescendants()) do
         if desc:IsA("ProximityPrompt") and self:HasValue(desc) then
             local part = desc.Parent
             local ok, pos = pcall(function()
@@ -536,7 +486,6 @@ function CollectSystem:GetBestTargets(plot, hrp)
             end
         end
     end
-    
     table.sort(targets, function(a, b)
         if a.gem ~= b.gem then return a.gem end
         if a.value ~= b.value then return a.value > b.value end
@@ -550,25 +499,11 @@ function CollectSystem:CollectLoop()
         local char = player.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         local hum = char and char:FindFirstChildOfClass("Humanoid")
-        
         if not hrp or not hum then
             task.wait(1)
             continue
         end
-        
-        -- Refresh plot if needed
-        if not State.myPlot then
-            PlotSystem:RefreshPlot()
-            task.wait(0.5)
-        end
-        
-        if not State.myPlot then
-            task.wait(1)
-            continue
-        end
-        
-        local targets = self:GetBestTargets(State.myPlot, hrp)
-        
+        local targets = self:GetBestTargets(hrp)
         if #targets > 0 then
             local target = targets[1]
             hum:MoveTo(target.pos)
@@ -779,7 +714,7 @@ function UI:Build()
     local mainFrame = self:Create("Frame", {Name = "MainFrame", Size = UDim2.fromOffset(CONFIG.UI.Width, CONFIG.UI.Height), Position = UDim2.new(CONFIG.UI.X, -CONFIG.UI.Width/2, CONFIG.UI.Y, -CONFIG.UI.Height/2), BackgroundColor3 = Color3.fromRGB(20, 22, 26), BackgroundTransparency = 0.55, BorderSizePixel = 0, ClipsDescendants = true, Visible = true})
     if not mainFrame then return nil end
     mainFrame.Parent = gui
-    local corner = self:Create("UICorner", {CornerRadius = UDim.new(0, 4)})
+    local corner = self:Create("UICorner", {CornerRadius = UDim.new(0, 1)})
     if corner then corner.Parent = mainFrame end
     local stroke = self:Create("UIStroke", {Color = Color3.fromRGB(58, 63, 78), Thickness = 1})
     if stroke then stroke.Parent = mainFrame end
@@ -787,7 +722,7 @@ function UI:Build()
     -- Header
     local header = self:Create("Frame", {Name = "Header", Size = UDim2.new(1, 0, 0, 38), BackgroundColor3 = Color3.fromRGB(14, 15, 19), BackgroundTransparency = 0.65, BorderSizePixel = 0})
     if header then header.Parent = mainFrame end
-    local headerCorner = self:Create("UICorner", {CornerRadius = UDim.new(0, 4)})
+    local headerCorner = self:Create("UICorner", {CornerRadius = UDim.new(0, 1)})
     if headerCorner then headerCorner.Parent = header end
     -- Subtle bottom divider line on header
     local headerLine = self:Create("Frame", {Name = "HeaderLine", Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = Color3.fromRGB(52, 57, 70), BorderSizePixel = 0})
@@ -800,7 +735,7 @@ function UI:Build()
     local minimizeBtn = self:Create("TextButton", {Name = "MinimizeButton", Size = UDim2.new(0, 26, 0, 26), Position = UDim2.new(1, -66, 0, 6), BackgroundColor3 = Color3.fromRGB(38, 42, 52), BackgroundTransparency = 0.65, Text = "─", TextColor3 = Color3.fromRGB(160, 165, 178), TextSize = 12, Font = Enum.Font.GothamBold})
     if minimizeBtn then
         minimizeBtn.Parent = header
-        local minBtnCorner = self:Create("UICorner", {CornerRadius = UDim.new(0, 3)})
+        local minBtnCorner = self:Create("UICorner", {CornerRadius = UDim.new(0, 1)})
         if minBtnCorner then minBtnCorner.Parent = minimizeBtn end
     end
 
@@ -812,7 +747,7 @@ function UI:Build()
     local miniBtn = self:Create("TextButton", {Name = "MiniOpenButton", Size = UDim2.fromOffset(60, 60), Position = UDim2.new(0, 0, 0, 0), BackgroundColor3 = Color3.fromRGB(20, 22, 26), BackgroundTransparency = 0.65, Text = "⚔", TextColor3 = Color3.fromRGB(190, 195, 210), TextSize = 26, Font = Enum.Font.GothamBold, Visible = false})
     if miniBtn then
         miniBtn.Parent = gui
-        local miniCorner = self:Create("UICorner", {CornerRadius = UDim.new(0, 3)})
+        local miniCorner = self:Create("UICorner", {CornerRadius = UDim.new(0, 1)})
         if miniCorner then miniCorner.Parent = miniBtn end
         local miniStroke = self:Create("UIStroke", {Color = Color3.fromRGB(58, 63, 78), Thickness = 1})
         if miniStroke then miniStroke.Parent = miniBtn end
@@ -825,25 +760,21 @@ function UI:Build()
     local shopTab = self:Create("TextButton", {Name = "ShopTab", Size = UDim2.new(0.22, -2, 0, 26), Position = UDim2.new(0, 2, 0, 4), BackgroundColor3 = Color3.fromRGB(46, 50, 62), BackgroundTransparency = 0.92, Text = "Shop", TextColor3 = Color3.fromRGB(210, 215, 220), TextSize = 13, Font = Enum.Font.GothamSemibold})
     if shopTab then
         shopTab.Parent = tabContainer
-        local c = self:Create("UICorner", {CornerRadius = UDim.new(0, 3)}) if c then c.Parent = shopTab end
+        local c = self:Create("UICorner", {CornerRadius = UDim.new(0, 1)}) if c then c.Parent = shopTab end
     end
 
-    local blackMarketTab = self:Create("TextButton", {Name = "BlackMarketTab", Size = UDim2.new(0.22, -2, 0, 26), Position = UDim2.new(0.22, 2, 0, 4), BackgroundColor3 = Color3.fromRGB(28, 30, 38), BackgroundTransparency = 0.92, Text = "Black Market", TextColor3 = Color3.fromRGB(130, 135, 150), TextSize = 11, Font = Enum.Font.GothamSemibold})
-    if blackMarketTab then
-        blackMarketTab.Parent = tabContainer
-        local c = self:Create("UICorner", {CornerRadius = UDim.new(0, 3)}) if c then c.Parent = blackMarketTab end
-    end
+    local blackMarketTab = nil -- removed: BM tab hidden so auto-buy works without waiting
 
     local mapTab = self:Create("TextButton", {Name = "MapTab", Size = UDim2.new(0.22, -2, 0, 26), Position = UDim2.new(0.44, 2, 0, 4), BackgroundColor3 = Color3.fromRGB(28, 30, 38), BackgroundTransparency = 0.92, Text = "Base Map", TextColor3 = Color3.fromRGB(130, 135, 150), TextSize = 13, Font = Enum.Font.GothamSemibold})
     if mapTab then
         mapTab.Parent = tabContainer
-        local c = self:Create("UICorner", {CornerRadius = UDim.new(0, 3)}) if c then c.Parent = mapTab end
+        local c = self:Create("UICorner", {CornerRadius = UDim.new(0, 1)}) if c then c.Parent = mapTab end
     end
 
     local searchBox = self:Create("TextBox", {Name = "SearchBox", Size = UDim2.new(0.31, -10, 0, 24), Position = UDim2.new(0.68, 5, 0, 5), BackgroundColor3 = Color3.fromRGB(26, 28, 35), BackgroundTransparency = 0.80, Text = "", PlaceholderText = "🔍 Search...", TextColor3 = Color3.fromRGB(200, 205, 215), PlaceholderColor3 = Color3.fromRGB(85, 90, 108), TextSize = 12, Font = Enum.Font.Gotham, ClearTextOnFocus = false})
     if searchBox then
         searchBox.Parent = tabContainer
-        local c = self:Create("UICorner", {CornerRadius = UDim.new(0, 3)}) if c then c.Parent = searchBox end
+        local c = self:Create("UICorner", {CornerRadius = UDim.new(0, 1)}) if c then c.Parent = searchBox end
     end
 
     local controlsContainer = self:Create("Frame", {Name = "ControlsContainer", Size = UDim2.new(1, 0, 0, 34), Position = UDim2.new(0, 0, 0, 72), BackgroundColor3 = Color3.fromRGB(16, 18, 22), BackgroundTransparency = 0.80, BorderSizePixel = 0})
@@ -853,7 +784,7 @@ function UI:Build()
         local btn = self:Create("TextButton", {Name = name, Size = UDim2.new(0, 100, 0, 24), Position = pos, BackgroundColor3 = color, BackgroundTransparency = 0.40, Text = text, TextColor3 = Color3.fromRGB(255, 255, 255), TextSize = 10, Font = Enum.Font.GothamSemibold})
         if btn then
             btn.Parent = controlsContainer
-            local c = self:Create("UICorner", {CornerRadius = UDim.new(0, 3)}) if c then c.Parent = btn end
+            local c = self:Create("UICorner", {CornerRadius = UDim.new(0, 1)}) if c then c.Parent = btn end
         end
         return btn
     end
@@ -866,7 +797,7 @@ function UI:Build()
         local btn = self:Create("TextButton", {Name = name, Size = UDim2.new(0, 58, 0, 24), Position = pos, BackgroundColor3 = Color3.fromRGB(36, 40, 50), BackgroundTransparency = 0.55, Text = text, TextColor3 = Color3.fromRGB(185, 190, 205), TextSize = 11, Font = Enum.Font.GothamSemibold})
         if btn then
             btn.Parent = controlsContainer
-            local c = self:Create("UICorner", {CornerRadius = UDim.new(0, 3)}) if c then c.Parent = btn end
+            local c = self:Create("UICorner", {CornerRadius = UDim.new(0, 1)}) if c then c.Parent = btn end
         end
         return btn
     end
@@ -883,50 +814,7 @@ function UI:Build()
     local listLayout = self:Create("UIListLayout", {Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder})
     if listLayout then listLayout.Parent = listContainer end
 
-    -- Black Market INACTIVE overlay (covers the full list area, shown when BM is closed)
-    local bmInactiveOverlay = self:Create("Frame", {
-        Name = "BMInactiveOverlay",
-        Size = UDim2.new(1, -16, 1, -(38 + 34 + 34 + 12)),
-        Position = UDim2.new(0, 8, 0, 110),
-        BackgroundColor3 = Color3.fromRGB(12, 12, 18),
-        BackgroundTransparency = 0.15,
-        BorderSizePixel = 0,
-        ClipsDescendants = true,
-        Visible = false,
-        ZIndex = 10,
-    })
-    if bmInactiveOverlay then
-        bmInactiveOverlay.Parent = mainFrame
-        local oCorner = self:Create("UICorner", {CornerRadius = UDim.new(0, 6)})
-        if oCorner then oCorner.Parent = bmInactiveOverlay end
-        local inactiveLabel = self:Create("TextLabel", {
-            Name = "InactiveText",
-            Size = UDim2.new(2, 0, 2, 0),
-            Position = UDim2.new(-0.5, 0, -0.5, 0),
-            BackgroundTransparency = 1,
-            Text = "INACTIVE",
-            TextColor3 = Color3.fromRGB(220, 40, 40),
-            TextSize = 90,
-            Font = Enum.Font.GothamBold,
-            TextTransparency = 0.25,
-            Rotation = 45,
-            ZIndex = 11,
-        })
-        if inactiveLabel then inactiveLabel.Parent = bmInactiveOverlay end
-        local subLabel = self:Create("TextLabel", {
-            Name = "SubText",
-            Size = UDim2.new(1, 0, 0, 30),
-            Position = UDim2.new(0, 0, 0.65, 0),
-            BackgroundTransparency = 1,
-            Text = "Black Market is currently closed",
-            TextColor3 = Color3.fromRGB(200, 100, 100),
-            TextSize = 13,
-            Font = Enum.Font.GothamSemibold,
-            TextTransparency = 0,
-            ZIndex = 12,
-        })
-        if subLabel then subLabel.Parent = bmInactiveOverlay end
-    end
+    local bmInactiveOverlay = nil -- removed with BM tab
 
     -- Map Container (hidden by default)
     local mapContainer = self:Create("Frame", {Name = "MapContainer", Size = UDim2.new(1, -16, 1, -(38 + 34 + 34 + 12)), Position = UDim2.new(0, 8, 0, 110), BackgroundColor3 = Color3.fromRGB(12, 13, 17), BackgroundTransparency = 0.40, BorderSizePixel = 0, ClipsDescendants = true, Visible = false})
@@ -1021,7 +909,7 @@ function UI:Build()
     })
     if mapLegend then
         mapLegend.Parent = mapContainer
-        local mlCorner = self:Create("UICorner", {CornerRadius = UDim.new(0, 6)})
+        local mlCorner = self:Create("UICorner", {CornerRadius = UDim.new(0, 1)})
         if mlCorner then mlCorner.Parent = mapLegend end
     end
     
@@ -1150,7 +1038,7 @@ function UI:Build()
     local headerRow = self:Create("Frame", {Name = "HeaderRow", Size = UDim2.new(1, -10, 0, 24), BackgroundColor3 = Color3.fromRGB(26, 28, 36), BorderSizePixel = 0})
     if headerRow then
         headerRow.Parent = listContainer
-        local hrCorner = self:Create("UICorner", {CornerRadius = UDim.new(0, 5)})
+        local hrCorner = self:Create("UICorner", {CornerRadius = UDim.new(0, 1)})
         if hrCorner then hrCorner.Parent = headerRow end
         local hrStroke = self:Create("UIStroke", {Color = Color3.fromRGB(50, 55, 68), Thickness = 1})
         if hrStroke then hrStroke.Parent = headerRow end
@@ -1167,7 +1055,7 @@ function UI:Build()
     State.uiElements = {
         gui = gui, mainFrame = mainFrame, miniBtn = miniBtn,
         minimizeBtn = minimizeBtn, shopTab = shopTab,
-        blackMarketTab = blackMarketTab, mapTab = mapTab,
+        mapTab = mapTab,
         searchBox = searchBox, refreshToggle = refreshToggle, buyToggle = buyToggle,
         collectToggle = collectToggle, saveBtn = saveBtn, loadBtn = loadBtn,
         listContainer = listContainer, mapContainer = mapContainer,
@@ -1176,7 +1064,6 @@ function UI:Build()
         closeBtn = closeBtn,
         kothPanel = kothPanel,
         autoKOTHToggle = autoKOTHToggle,
-        bmInactiveOverlay = bmInactiveOverlay,
     }
     return State.uiElements
 end
@@ -1188,7 +1075,7 @@ function UI:CreateItemRow(item, index)
     local row = self:Create("Frame", {Name = "Item_" .. item.name:gsub("[^%w]", "_"), Size = UDim2.new(1, -10, 0, 28), BackgroundColor3 = rowBg, BackgroundTransparency = 0.72, BorderSizePixel = 0, LayoutOrder = index})
     if not row then return nil end
     row.Parent = container
-    local rowCorner = self:Create("UICorner", {CornerRadius = UDim.new(0, 5)})
+    local rowCorner = self:Create("UICorner", {CornerRadius = UDim.new(0, 1)})
     if rowCorner then rowCorner.Parent = row end
     local widths = {0.35, 0.15, 0.2, 0.15, 0.15}
     local offset = 0
@@ -1202,7 +1089,7 @@ function UI:CreateItemRow(item, index)
     local checkbox = self:Create("TextButton", {Name = "AutoBuyCheckbox", Size = UDim2.new(widths[5], -8, 0.68, 0), Position = UDim2.new(offset, 4, 0.16, 0), BackgroundColor3 = item.selected and Color3.fromRGB(42, 118, 62) or Color3.fromRGB(32, 35, 45), Text = item.selected and "✓" or "", TextColor3 = Color3.fromRGB(180, 225, 185), TextSize = 13, Font = Enum.Font.GothamBold})
     if checkbox then
         checkbox.Parent = row
-        local cbCorner = self:Create("UICorner", {CornerRadius = UDim.new(0, 4)})
+        local cbCorner = self:Create("UICorner", {CornerRadius = UDim.new(0, 1)})
         if cbCorner then cbCorner.Parent = checkbox end
         local cbStroke = self:Create("UIStroke", {Color = Color3.fromRGB(55, 60, 76), Thickness = 1})
         if cbStroke then cbStroke.Parent = checkbox end
@@ -1379,10 +1266,6 @@ function UI:UpdateTabColors()
     State.uiElements.shopTab.BackgroundTransparency = State.currentTab == "Shop" and activeTransp or inactiveTransp
     State.uiElements.shopTab.TextColor3             = State.currentTab == "Shop" and activeText  or inactiveText
 
-    if State.uiElements.blackMarketTab then
-        State.uiElements.blackMarketTab.BackgroundTransparency = State.currentTab == "BlackMarket" and activeTransp or inactiveTransp
-        State.uiElements.blackMarketTab.TextColor3             = State.currentTab == "BlackMarket" and activeText  or inactiveText
-    end
     if State.uiElements.mapTab then
         State.uiElements.mapTab.BackgroundTransparency = State.currentTab == "Map" and activeTransp or inactiveTransp
         State.uiElements.mapTab.TextColor3             = State.currentTab == "Map" and activeText  or inactiveText
@@ -1583,14 +1466,6 @@ function EventHandlers:Setup()
             self:RefreshAndUpdate()
         end))
     end
-    -- ===== BLACK MARKET TAB HANDLER =====
-    if elems.blackMarketTab then
-        table.insert(State.connections, elems.blackMarketTab.MouseButton1Click:Connect(function()
-            State.currentTab = "BlackMarket"
-            UI:UpdateTabColors()
-            UI:ShowBlackMarket()
-        end))
-    end
     if elems.mapTab then
         table.insert(State.connections, elems.mapTab.MouseButton1Click:Connect(function()
             State.currentTab = "Map"
@@ -1750,26 +1625,6 @@ function EventHandlers:RefreshAndUpdate()
         ShopData:RefreshShop()
         local filtered = ShopData:FilterItems(State.shopItems, State.searchQuery)
         UI:UpdateList(filtered)
-    elseif State.currentTab == "BlackMarket" then
-        BlackMarketSystem:RefreshStatus()
-        if State.isBlackMarketActive then
-            if State.uiElements.bmInactiveOverlay then
-                State.uiElements.bmInactiveOverlay.Visible = false
-            end
-            if State.uiElements.listContainer then
-                State.uiElements.listContainer.Visible = true
-            end
-            ShopData:RefreshBlackMarket()
-            local filtered = ShopData:FilterItems(State.blackMarketItems, State.searchQuery)
-            UI:UpdateList(filtered)
-        else
-            if State.uiElements.listContainer then
-                State.uiElements.listContainer.Visible = false
-            end
-            if State.uiElements.bmInactiveOverlay then
-                State.uiElements.bmInactiveOverlay.Visible = true
-            end
-        end
     end
 end
 
@@ -1779,7 +1634,7 @@ local MainLoop = {}
 function MainLoop:StartRefreshLoop()
     local thread = task.spawn(function()
         while State.running do
-            if State.autoRefresh and (State.currentTab == "Shop" or State.currentTab == "BlackMarket") then
+            if State.autoRefresh and State.currentTab == "Shop" then
                 EventHandlers:RefreshAndUpdate()
             end
             task.wait(CONFIG.RefreshInterval)
@@ -1794,7 +1649,7 @@ function MainLoop:StartAutoBuyLoop()
             if State.autoBuy then
                 PurchaseSystem:AutoBuy()
             end
-            task.wait(0.075)
+            task.wait(1)
         end
     end)
     table.insert(State.threads, thread)
