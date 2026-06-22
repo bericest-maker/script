@@ -456,14 +456,6 @@ function CollectSystem:HasValue(prompt)
     return amount > 0
 end
 
-function CollectSystem:GetTargetPriority(building, prompt, hrp)
-    local text = (prompt.ObjectText or "") .. " " .. (prompt.ActionText or "")
-    local amount = Utility:ExtractAmount(text)
-    local isGemMine = building.Name == "GemMine"
-    local pos = building:GetPivot().Position
-    return {building = building, prompt = prompt, pos = pos, value = amount, gem = isGemMine, dist = (pos - hrp.Position).Magnitude}
-end
-
 function CollectSystem:GetBestTargets(hrp)
     -- Scan ALL ProximityPrompts in workspace — server enforces ownership, so safe to attempt any
     local targets = {}
