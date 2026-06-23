@@ -457,9 +457,17 @@ function CollectSystem:HasValue(prompt)
 end
 
 function CollectSystem:GetBestTargets(hrp)
-    -- Scan ALL ProximityPrompts in workspace — server enforces ownership, so safe to attempt any
+    -- Get your plot first
+    if not State.myPlot then
+        PlotSystem:RefreshPlot()
+    end
+    if not State.myPlot then
+        return {}
+    end
+    
+    -- Scan ONLY your plot's descendants for ProximityPrompts
     local targets = {}
-    for _, desc in ipairs(workspace:GetDescendants()) do
+    for _, desc in ipairs(State.myPlot:GetDescendants()) do
         if desc:IsA("ProximityPrompt") and self:HasValue(desc) then
             local part = desc.Parent
             local ok, pos = pcall(function()
