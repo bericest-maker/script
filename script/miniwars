@@ -445,12 +445,14 @@ player.CharacterRemoving:Connect(function() SaveSystem:Save() end)
 print("[MiniWars] Game logic loaded! Now load Part 2 for the UI.")
 
 -- ============================================
--- PART 2: UI LIBRARY + INTEGRATION
--- Load AFTER Part 1 (or combine them)
+-- PART 2: UI LIBRARY + INTEGRATION (FIXED)
+-- Load AFTER Part 1
 -- ============================================
 
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
+local RunService = game:GetService("RunService")
+local HttpService = game:GetService("HttpService")
 
 -- Access globals from Part 1
 local State = _G.MiniWarsState
@@ -467,7 +469,7 @@ local KOTHSystem = _G.MiniWarsKOTHSystem
 local MainLoop = _G.MiniWarsMainLoop
 
 -- ============================================
--- UI LIBRARY
+-- UI LIBRARY (RightShift fixed)
 -- ============================================
 local library = {count = 0, queue = {}, callbacks = {}, rainbowtable = {}, toggled = true, binds = {}};
 local defaults; do
@@ -500,9 +502,10 @@ local defaults; do
 				end)
 			end
 		end
+		-- FIXED: RightShift instead of RightControl
 		game:GetService('UserInputService').InputBegan:connect(function(key, gpe)
 			if (not gpe) then
-				if key.KeyCode == Enum.KeyCode.RightControl then
+				if key.KeyCode == Enum.KeyCode.RightShift then
 					library.toggled = not library.toggled;
 					for i, data in next, library.queue do
 						local pos = (library.toggled and data.p or UDim2.new(-1, 0, -0.5,0))
@@ -1308,7 +1311,28 @@ local defaults; do
 end
 
 -- ============================================
--- INTEGRATION: Create Windows with your features
+-- FIXED COLLECT: No walking, just fire all prompts in plot
+-- ============================================
+function CollectSystem:CollectAllLoop()
+    while State.autoCollect do
+        if not State.myPlot then PlotSystem:RefreshPlot() end
+        if not State.myPlot then task.wait(2) continue end
+
+        for _, desc in ipairs(State.myPlot:GetDescendants()) do
+            if desc:IsA("ProximityPrompt") and self:HasValue(desc) then
+                pcall(function() fireproximityprompt(desc) end)
+                task.wait(0.05)
+            end
+        end
+        task.wait(0.5)
+    end
+end
+
+-- Override the old collect loop
+_G.MiniWarsCollectSystem.CollectLoop = CollectSystem.CollectAllLoop
+
+-- ============================================
+-- INTEGRATION: Create Windows
 -- ============================================
 
 -- Main Window
@@ -1321,34 +1345,30 @@ local MainWindow = library:CreateWindow("MiniWars", {
 	fontsize = 17;
 })
 
--- Section: Toggles
+-- Section: Auto Features
 MainWindow:Section("--- Auto Features ---")
 
--- Auto Refresh Toggle
 MainWindow:Toggle("Auto Refresh Shop", {default = State.autoRefresh, flag = "autoRefresh"}, function(state)
 	State.autoRefresh = state
 	SaveSystem:Save()
 	print("Auto Refresh:", state)
 end)
 
--- Auto Buy Toggle
 MainWindow:Toggle("Auto Buy", {default = State.autoBuy, flag = "autoBuy"}, function(state)
 	State.autoBuy = state
 	SaveSystem:Save()
 	print("Auto Buy:", state)
 end)
 
--- Auto Collect Toggle
-MainWindow:Toggle("Auto Collect", {default = State.autoCollect, flag = "autoCollect"}, function(state)
+MainWindow:Toggle("Auto Collect (No Walk)", {default = State.autoCollect, flag = "autoCollect"}, function(state)
 	State.autoCollect = state
 	SaveSystem:Save()
 	if state then
-		table.insert(State.threads, task.spawn(function() CollectSystem:CollectLoop() end))
+		table.insert(State.threads, task.spawn(function() CollectSystem:CollectAllLoop() end))
 	end
 	print("Auto Collect:", state)
 end)
 
--- Auto KOTH Toggle
 MainWindow:Toggle("Auto KOTH Deploy", {default = State.autoKOTH, flag = "autoKOTH"}, function(state)
 	State.autoKOTH = state
 	SaveSystem:Save()
@@ -1358,35 +1378,30 @@ end)
 -- Section: Actions
 MainWindow:Section("--- Actions ---")
 
--- Refresh Shop Button
 MainWindow:Button("Refresh Shop", function()
 	ShopData:RefreshShop()
 	print("Shop refreshed. Items:", #State.shopItems)
 end)
 
--- Refresh Black Market Button
 MainWindow:Button("Refresh Black Market", function()
 	ShopData:RefreshBlackMarket()
-	print("Black Market refreshed. Active:", State.isBlackMarketActive, "Items:", #State.blackMarketItems)
+	print("BM refreshed. Active:", State.isBlackMarketActive, "Items:", #State.blackMarketItems)
 end)
 
--- Save Button
 MainWindow:Button("Save Settings", function()
 	local ok = SaveSystem:Save()
 	print("Save:", ok and "Success" or "Failed")
 end)
 
--- Load Button
 MainWindow:Button("Load Settings", function()
 	SaveSystem:Load()
 	print("Settings loaded")
 end)
 
--- Section: Manual Buy
+-- Section: Quick Buy
 MainWindow:Section("--- Quick Buy ---")
 
--- Buy specific item box
-local buyBox = MainWindow:Box("Buy Item", {type = "string"}, function(text)
+MainWindow:Box("Buy Item Name", {type = "string"}, function(text)
 	if text and text ~= "" then
 		local ok = PurchaseSystem:BuyItem(text)
 		print("Buy", text, ok and "Success" or "Failed")
@@ -1396,8 +1411,7 @@ end)
 -- Section: Search
 MainWindow:Section("--- Search ---")
 
--- Search box for filtering items
-local searchBox = MainWindow:Box("Search Items", {type = "string"}, function(text)
+MainWindow:Box("Search Items", {type = "string"}, function(text)
 	State.searchQuery = text or ""
 	local items = ShopData:GetCurrentItems()
 	local filtered = ShopData:FilterItems(items, State.searchQuery)
@@ -1407,7 +1421,6 @@ end)
 -- Section: Map
 MainWindow:Section("--- Map ---")
 
--- Scan bases button
 MainWindow:Button("Scan Bases", function()
 	local bases = MapSystem:scanBases()
 	print("Found", #bases, "bases")
@@ -1416,7 +1429,6 @@ MainWindow:Button("Scan Bases", function()
 	end
 end)
 
--- Deploy to KOTH button
 MainWindow:Button("Deploy to KOTH", function()
 	for _, m in ipairs(KOTHSystem:getKOTHModels()) do
 		KOTHSystem:deployToKOTH(m.instance)
@@ -1427,12 +1439,13 @@ end)
 -- Section: Settings
 MainWindow:Section("--- Settings ---")
 
--- Keybind to toggle UI (RightShift is default, but you can set custom)
 MainWindow:Bind("Toggle UI Key", {default = Enum.KeyCode.RightShift}, function()
 	print("Keybind pressed!")
 end)
 
--- Second Window: Item List (for viewing shop items)
+-- ============================================
+-- ITEM LIST WINDOW (with working checkboxes)
+-- ============================================
 local ListWindow = library:CreateWindow("Shop Items", {
 	topcolor = Color3.fromRGB(30, 30, 30);
 	underlinecolor = Color3.fromRGB(0, 255, 140);
@@ -1442,44 +1455,68 @@ local ListWindow = library:CreateWindow("Shop Items", {
 	fontsize = 17;
 })
 
--- Dropdown to select tab
-ListWindow:Dropdown("Tab", {
-	list = {"Shop", "BlackMarket"}
-}, function(selected)
+-- Tab selector
+ListWindow:Dropdown("Tab", {list = {"Shop", "BlackMarket"}}, function(selected)
 	State.currentTab = selected
-	print("Switched to tab:", selected)
+	print("Switched to:", selected)
 end)
 
--- Section: Item List Display
-ListWindow:Section("--- Item List ---")
+ListWindow:Section("--- Item Controls ---")
 
--- This is a simplified display - the library doesn't have a scrolling list widget
--- So we use buttons to show top items
-local refreshListBtn = ListWindow:Button("Refresh List", function()
-	-- Clear old buttons (simplified - in practice you'd manage UI elements)
+-- Refresh and populate the list
+local itemToggles = {}
+local function refreshItemList()
+	-- Remove old toggles
+	for _, toggleData in ipairs(itemToggles) do
+		if toggleData.frame and toggleData.frame.Parent then
+			toggleData.frame:Destroy()
+		end
+	end
+	itemToggles = {}
+
+	-- Refresh data
 	if State.currentTab == "Shop" then
 		ShopData:RefreshShop()
 	else
 		ShopData:RefreshBlackMarket()
 	end
+
 	local items = ShopData:GetCurrentItems()
 	local filtered = ShopData:FilterItems(items, State.searchQuery)
-	print("---", State.currentTab, "Items (", #filtered, ") ---")
-	for _, item in ipairs(filtered) do
-		print(item.name, "|", item.rarity, "|", item.priceFormatted, "| Stock:", item.hasStock and "Yes" or "No")
+
+	-- Show max 15 items as toggles (library window gets too long otherwise)
+	local maxItems = math.min(#filtered, 15)
+	for i = 1, maxItems do
+		local item = filtered[i]
+		local toggleObj = ListWindow:Toggle(item.name .. " [" .. item.rarity .. "]", {
+			default = State.autoBuySelections[item.name] or false
+		}, function(state)
+			State.autoBuySelections[item.name] = state
+			SaveSystem:Save()
+			print(item.name, "autobuy:", state)
+		end)
+		table.insert(itemToggles, {frame = toggleObj, item = item})
 	end
+
+	if #filtered > maxItems then
+		print("Showing", maxItems, "of", #filtered, "items. Use search to filter.")
+	end
+end
+
+ListWindow:Button("Refresh Item List", function()
+	refreshItemList()
 end)
 
--- Auto-buy selection via search box
-ListWindow:SearchBox("Select Item to AutoBuy", {
-	list = {}
-}, function(selected)
-	State.autoBuySelections[selected] = not (State.autoBuySelections[selected] or false)
-	print(selected, "autobuy:", State.autoBuySelections[selected])
+ListWindow:Button("Clear AutoBuy Selections", function()
+	State.autoBuySelections = {}
 	SaveSystem:Save()
+	refreshItemList()
+	print("Cleared all AutoBuy selections")
 end)
 
--- Third Window: Base Map
+-- ============================================
+-- MAP WINDOW
+-- ============================================
 local MapWindow = library:CreateWindow("Base Map", {
 	topcolor = Color3.fromRGB(30, 30, 30);
 	underlinecolor = Color3.fromRGB(255, 100, 0);
@@ -1491,7 +1528,6 @@ local MapWindow = library:CreateWindow("Base Map", {
 
 MapWindow:Section("--- Base Actions ---")
 
--- Capture nearest enemy base
 MapWindow:Button("Capture Nearest Enemy", function()
 	local bases = MapSystem:scanBases()
 	local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
@@ -1512,7 +1548,6 @@ MapWindow:Button("Capture Nearest Enemy", function()
 	end
 end)
 
--- Capture all unclaimed bases
 MapWindow:Button("Capture All Unclaimed", function()
 	local bases = MapSystem:scanBases()
 	for _, b in ipairs(bases) do
@@ -1521,10 +1556,9 @@ MapWindow:Button("Capture All Unclaimed", function()
 			task.wait(0.2)
 		end
 	end
-	print("Captured all unclaimed bases")
+	print("Captured all unclaimed")
 end)
 
--- Recall to town
 MapWindow:Button("Recall All to Town", function()
 	pcall(function()
 		local GetBridge = require(ReplicatedStorage.util.GetBridge)
@@ -1538,7 +1572,6 @@ MapWindow:Button("Recall All to Town", function()
 	end)
 end)
 
--- Plot info
 MapWindow:Section("--- Plot Info ---")
 
 MapWindow:Button("Refresh My Plot", function()
@@ -1546,4 +1579,4 @@ MapWindow:Button("Refresh My Plot", function()
 	print("My plot:", State.myPlot and State.myPlot.Name or "Not found")
 end)
 
-print("[MiniWars] UI Loaded! Press RightControl to toggle windows.")
+print("[MiniWars] UI Loaded! Press RightShift to toggle windows.")
