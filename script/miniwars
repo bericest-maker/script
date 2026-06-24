@@ -504,118 +504,63 @@ function CollectSystem:HasValue(prompt)
 end
 
 function CollectSystem:GetBestTargets(hrp)
-    -- Refresh plot if needed
+    -- Get your plot first
     if not State.myPlot then
         PlotSystem:RefreshPlot()
-        print("[Collect] Refreshed plot:", State.myPlot and State.myPlot.Name or "NIL")
     end
-    
     if not State.myPlot then
-        print("[Collect] ERROR: No plot found!")
         return {}
     end
     
-    -- Scan ONLY your plot's descendants
+    -- Scan ONLY your plot's descendants for ProximityPrompts
     local targets = {}
-    local scanned = 0
-    local found = 0
-    
     for _, desc in ipairs(State.myPlot:GetDescendants()) do
-        if desc:IsA("ProximityPrompt") then
-            scanned = scanned + 1
-            if self:HasValue(desc) then
-                local part = desc.Parent
-                local ok, pos = pcall(function()
-                    if part.GetPivot then return part:GetPivot().Position end
-                    return part.Position
-                end)
-                if ok and pos then
-                    found = found + 1
-                    local dist = (pos - hrp.Position).Magnitude
-                    local text = (desc.ObjectText or "") .. " " .. (desc.ActionText or "")
-                    table.insert(targets, {
-                        building = part, 
-                        prompt = desc, 
-                        pos = pos,
-                        value = Utility:ExtractAmount(text),
-                        gem = part.Name == "GemMine",
-                        dist = dist,
-                    })
-                end
+        if desc:IsA("ProximityPrompt") and self:HasValue(desc) then
+            local part = desc.Parent
+            local ok, pos = pcall(function()
+                if part.GetPivot then return part:GetPivot().Position end
+                return part.Position
+            end)
+            if ok and pos then
+                local dist = (pos - hrp.Position).Magnitude
+                local text = (desc.ObjectText or "") .. " " .. (desc.ActionText or "")
+                table.insert(targets, {
+                    building = part, prompt = desc, pos = pos,
+                    value = Utility:ExtractAmount(text),
+                    gem = part.Name == "GemMine",
+                    dist = dist,
+                })
             end
         end
     end
-    
-    print("[Collect] Scanned", scanned, "prompts, found", found, "valid targets in plot:", State.myPlot.Name)
-    
     table.sort(targets, function(a, b)
         if a.gem ~= b.gem then return a.gem end
         if a.value ~= b.value then return a.value > b.value end
         return a.dist < b.dist
     end)
-    
     return targets
 end
 
 function CollectSystem:CollectLoop()
-    print("[Collect] Loop STARTED - autoCollect:", State.autoCollect)
-    
     while State.autoCollect do
         local char = player.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         local hum = char and char:FindFirstChildOfClass("Humanoid")
-        
         if not hrp or not hum then
-            print("[Collect] Waiting for character...")
             task.wait(1)
             continue
         end
-        
         local targets = self:GetBestTargets(hrp)
-        print("[Collect] Targets found:", #targets)
-        
         if #targets > 0 then
             local target = targets[1]
-            print("[Collect] Moving to:", target.building.Name, "Value:", target.value, "Dist:", math.floor(target.dist))
-            
             hum:MoveTo(target.pos)
-            task.wait(0.6)
-            
-            -- Try fireproximityprompt first
-            local fireOk, fireErr = pcall(function()
-                if fireproximityprompt then
-                    fireproximityprompt(target.prompt)
-                    print("[Collect] Fired prompt via fireproximityprompt")
-                else
-                    error("fireproximityprompt not available")
-                end
-            end)
-            
-            if not fireOk then
-                print("[Collect] fireproximityprompt failed:", fireErr)
-                -- Fallback: try to trigger via the part
-                pcall(function()
-                    if target.prompt and target.prompt.Parent then
-                        -- Some executors support different methods
-                        if typeof(target.prompt) == "Instance" then
-                            -- Try direct interaction
-                            local pp = target.prompt
-                            if pp.HoldDuration == 0 then
-                                -- Instant prompt, might work with just being close
-                                print("[Collect] HoldDuration is 0, just being close should work")
-                            end
-                        end
-                    end
-                end)
-            end
-            
-            task.wait(0.3)
+            task.wait(0.5)
+            pcall(function() fireproximityprompt(target.prompt) end)
+            task.wait(0.2)
         else
             task.wait(1)
         end
     end
-    
-    print("[Collect] Loop ENDED")
 end
 
 -- ===== MAP SYSTEM =====
