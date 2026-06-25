@@ -34,7 +34,7 @@ end
 
 local CONFIG = {
     SaveKey = "ShopAutoBuy_SaveData_v23",
-    RefreshInterval = 5, BuyCooldown = 0.1,
+    RefreshInterval = 1, BuyCooldown = 0.1,
     KOTHDeployInterval = 3, AutoSaveInterval = 5,
     MapSize = 3000, MinZoom = 0.5, MaxZoom = 5, ZoomStep = 0.2,
     RarityColors = {
@@ -178,19 +178,23 @@ _G.MiniWarsItemParser = ItemParser
 
 local ShopData = {}
 function ShopData:GetShopGrid() return Utility:SafeFindFirstChild(player, "PlayerGui", "MainUI", "Fullscreen", "BuyUI", "ItemsGrid") end
+
 function ShopData:GetBlackMarketGrid() return Utility:SafeFindFirstChild(player, "PlayerGui", "MainUI", "Fullscreen", "BlackMarketUI", "ItemsGrid") end
+
 function ShopData:RefreshShop()
     local grid = self:GetShopGrid()
     State.shopItems = ItemParser:ScanItems(grid)
     self:SortItems(State.shopItems)
     return State.shopItems
 end
+
 function ShopData:RefreshBlackMarket()
     BlackMarketSystem:RefreshStatus()
     State.blackMarketItems = ItemParser:ScanItems(self:GetBlackMarketGrid())
     self:SortItems(State.blackMarketItems)
     return State.blackMarketItems
 end
+
 function ShopData:SortItems(items)
     table.sort(items, function(a,b) if a.hasStock~=b.hasStock then return a.hasStock end if a.rarityValue~=b.rarityValue then return a.rarityValue>b.rarityValue end return a.name<b.name end)
 end
@@ -455,10 +459,12 @@ end
 _G.MiniWarsKOTHSystem = KOTHSystem
 
 local MainLoop = {}
+
 function MainLoop:StartRefreshLoop()
     table.insert(State.threads, task.spawn(function()
         while State.running do
             if State.autoRefresh and (State.currentTab=="Shop" or State.currentTab=="BlackMarket") then
+                print("[Refresh] Refreshing " .. State.currentTab) -- DEBUG
                 if State.currentTab=="Shop" then ShopData:RefreshShop() else ShopData:RefreshBlackMarket() end
                 if _G._shopColumnRefresh then _G._shopColumnRefresh() end
             end
@@ -1387,6 +1393,7 @@ local defaults; do
 	function library:CreateWindow(name, options)
 		if (not library.container) then
 			library.container = self:Create("ScreenGui", {
+				Name = "MiniWarsUI";
 				self:Create('Frame', {
 					Name = 'Container';
 					Size = UDim2.new(1, -30, 1, 0);
@@ -1449,14 +1456,11 @@ local defaults; do
 	end)
 end
 
-local existingGui = game:GetService("CoreGui"):FindFirstChild("ScreenGui")
-if existingGui then
-	local container = existingGui:FindFirstChild("Container")
-	if container then
-		for _, child in ipairs(container:GetChildren()) do
-			child:Destroy()
-		end
-	end
+-- Destroy old MiniWars UI completely
+local CoreGui = game:GetService("CoreGui")
+local oldGui = CoreGui:FindFirstChild("MiniWarsUI")
+if oldGui then
+    oldGui:Destroy()
 end
 
 local MainWindow = library:CreateWindow("MiniWars", {
