@@ -177,53 +177,32 @@ end
 _G.MiniWarsItemParser = ItemParser
 
 local ShopData = {}
-
-function ShopData:GetShopGrid()
-    return Utility:SafeFindFirstChild(player, "PlayerGui", "MainUI", "Fullscreen", "BuyUI", "ItemsGrid")
-end
-
-function ShopData:GetBlackMarketGrid()
-    return Utility:SafeFindFirstChild(player, "PlayerGui", "MainUI", "Fullscreen", "BlackMarketUI", "ItemsGrid")
-end
-
+function ShopData:GetShopGrid() return Utility:SafeFindFirstChild(player, "PlayerGui", "MainUI", "Fullscreen", "BuyUI", "ItemsGrid") end
+function ShopData:GetBlackMarketGrid() return Utility:SafeFindFirstChild(player, "PlayerGui", "MainUI", "Fullscreen", "BlackMarketUI", "ItemsGrid") end
 function ShopData:RefreshShop()
     local grid = self:GetShopGrid()
     State.shopItems = ItemParser:ScanItems(grid)
     self:SortItems(State.shopItems)
     return State.shopItems
 end
-
 function ShopData:RefreshBlackMarket()
     BlackMarketSystem:RefreshStatus()
-    local grid = self:GetBlackMarketGrid()
-    State.blackMarketItems = ItemParser:ScanItems(grid)
+    State.blackMarketItems = ItemParser:ScanItems(self:GetBlackMarketGrid())
     self:SortItems(State.blackMarketItems)
     return State.blackMarketItems
 end
-
 function ShopData:SortItems(items)
-    table.sort(items, function(a, b)
-        if a.hasStock ~= b.hasStock then return a.hasStock end
-        if a.rarityValue ~= b.rarityValue then return a.rarityValue > b.rarityValue end
-        return a.name < b.name
-    end)
+    table.sort(items, function(a,b) if a.hasStock~=b.hasStock then return a.hasStock end if a.rarityValue~=b.rarityValue then return a.rarityValue>b.rarityValue end return a.name<b.name end)
 end
-
-function ShopData:GetCurrentItems()
-    if State.currentTab == "Shop" then return State.shopItems end
-    if State.currentTab == "BlackMarket" then return State.blackMarketItems end
-    return State.blackMarketItems
-end
-
+function ShopData:GetCurrentItems() return State.currentTab=="Shop" and State.shopItems or State.blackMarketItems end
 function ShopData:FilterItems(items, query)
-    if not query or query == "" then return items end
+    if not query or query=="" then return items end
     query = query:lower()
     local filtered = {}
-    for _, item in ipairs(items) do
-        if item.name:lower():find(query, 1, true) then table.insert(filtered, item) end
-    end
+    for _, item in ipairs(items) do if item.name:lower():find(query,1,true) then table.insert(filtered,item) end end
     return filtered
 end
+_G.MiniWarsShopData = ShopData
 
 local PurchaseSystem = {}
 
