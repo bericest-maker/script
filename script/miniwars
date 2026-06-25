@@ -33,7 +33,7 @@ elseif fluxus and fluxus.queue_on_teleport then
 end
 
 local CONFIG = {
-    SaveKey = "ShopAutoBuy_SaveData_v21",
+    SaveKey = "ShopAutoBuy_SaveData_v22",
     RefreshInterval = 5, BuyCooldown = 0.1,
     KOTHDeployInterval = 3, AutoSaveInterval = 5,
     MapSize = 3000, MinZoom = 0.5, MaxZoom = 5, ZoomStep = 0.2,
@@ -64,7 +64,7 @@ function Utility:DisconnectTable(t) for _,c in pairs(t or {}) do self:Disconnect
 function Utility:CancelThread(th) if th and coroutine.status(th)~="dead" then task.cancel(th) end end
 function Utility:SafeFindFirstChild(p,...) if not p then return nil end local c=p for _,n in ipairs({...}) do c=c:FindFirstChild(n) if not c then return nil end end return c end
 function Utility:ExtractAmount(t) if not t then return 0 end local a=t:match("x([%d%.]+)") return a and tonumber(a) or 0 end
-function Utility:FormatPrice(t) if not t or t=="" then return "N/A" end t=t:gsub("^%s*",""):gsub("%s*$") return t=="" and "N/A" or t end
+function Utility:FormatPrice(t) if not t or t=="" then return "N/A" end t=t:gsub("^%s*",""):gsub("%s*$","") return t=="" and "N/A" or t end
 function Utility:SafeGetText(o) return (o and (o:IsA("TextLabel") or o:IsA("TextBox") or o:IsA("TextButton")) and o.Text) or "" end
 function Utility:ParseRarity(t) if not t then return "Common" end t=t:gsub("%s+",""):lower() local r={"mythic","legendary","epic","rare","uncommon","common","secret","divine"} for _,v in ipairs(r) do if t:find(v) then return v:sub(1,1):upper()..v:sub(2) end end return "Common" end
 function Utility:GetRarityColor(r) return CONFIG.RarityColors[r] or CONFIG.RarityColors.Common end
@@ -75,7 +75,7 @@ _G.MiniWarsUtility = Utility
 local SaveSystem = {}
 function SaveSystem:Save()
     return pcall(function()
-        local d = { autoBuySelections=State.autoBuySelections, autoBuy=State.autoBuy, autoRefresh=State.autoRefresh, autoCollect=State.autoCollect, autoKOTH=State.autoKOTH, version=21 }
+        local d = { autoBuySelections=State.autoBuySelections, autoBuy=State.autoBuy, autoRefresh=State.autoRefresh, autoCollect=State.autoCollect, autoKOTH=State.autoKOTH, version=22 }
         if writefile then writefile(CONFIG.SaveKey..".json", HttpService:JSONEncode(d)) end
     end)
 end
@@ -444,6 +444,7 @@ local player = Players.LocalPlayer
 local RunService = game:GetService("RunService")
 local HttpService = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
 
 local State = _G.MiniWarsState
 local Utility = _G.MiniWarsUtility
@@ -491,7 +492,7 @@ local defaults; do
 		end
 		game:GetService('UserInputService').InputBegan:connect(function(key, gpe)
 			if (not gpe) then
-				if key.KeyCode == Enum.KeyCode.RightAlt then
+				if key.KeyCode == Enum.KeyCode.N then
 					library.toggled = not library.toggled;
 					for i, data in next, library.queue do
 						local pos = (library.toggled and data.p or UDim2.new(-1, 0, -0.5,0))
@@ -1194,7 +1195,7 @@ local defaults; do
 			end
 			return {Refresh = reload;}
 		end
-		function types:List(name, options, callback)
+		function types:Column(name, options, callback)
 			local location = options.location or self.flags;
 			local flag = options.flag or "";
 			local callback = callback or function() end;
@@ -1220,7 +1221,7 @@ local defaults; do
 					TextStrokeColor3 = library.options.strokecolor;
 				});
 				library:Create('ScrollingFrame', {
-					Name = 'ListContainer';
+					Name = 'ColumnContainer';
 					Position = UDim2.new(0, 5, 0, 22);
 					Size = UDim2.new(1, -10, 0, math.min(#list, maxVisible) * itemHeight);
 					BackgroundColor3 = library.options.bgcolor;
@@ -1236,10 +1237,10 @@ local defaults; do
 				});
 				Parent = self.container;
 			});
-			local listContainer = check:FindFirstChild('ListContainer');
-			local function buildList(newList)
+			local columnContainer = check:FindFirstChild('ColumnContainer');
+			local function buildColumn(newList)
 				list = newList or list;
-				for _, child in ipairs(listContainer:GetChildren()) do
+				for _, child in ipairs(columnContainer:GetChildren()) do
 					if child:IsA('TextButton') then child:Destroy(); end
 				end
 				for i, v in ipairs(list) do
@@ -1251,7 +1252,7 @@ local defaults; do
 						Font = library.options.font;
 						TextSize = library.options.fontsize;
 						LayoutOrder = i;
-						Parent = listContainer;
+						Parent = columnContainer;
 						ZIndex = 3;
 						TextColor3 = library.options.textcolor;
 						TextStrokeTransparency = library.options.textstroke;
@@ -1262,14 +1263,14 @@ local defaults; do
 						callback(location[flag], btn.Text);
 					end)
 				end
-				listContainer.CanvasSize = UDim2.new(0, 0, 0, #list * itemHeight);
-				listContainer.ScrollBarThickness = (#list > maxVisible and 5 or 0);
+				columnContainer.CanvasSize = UDim2.new(0, 0, 0, #list * itemHeight);
+				columnContainer.ScrollBarThickness = (#list > maxVisible and 5 or 0);
 				check.Size = UDim2.new(1, 0, 0, 25 + (math.min(#list, maxVisible) * itemHeight));
 			end
-			buildList(list);
+			buildColumn(list);
 			self:Resize();
 			return {
-				Refresh = function(self, newList) buildList(newList); end,
+				Refresh = function(self, newList) buildColumn(newList); end,
 				GetSelected = function() return location[flag]; end
 			}
 		end
@@ -1375,6 +1376,16 @@ local defaults; do
 	end)
 end
 
+local existingGui = game:GetService("CoreGui"):FindFirstChild("ScreenGui")
+if existingGui then
+	local container = existingGui:FindFirstChild("Container")
+	if container then
+		for _, child in ipairs(container:GetChildren()) do
+			child:Destroy()
+		end
+	end
+end
+
 local MainWindow = library:CreateWindow("MiniWars", {
 	topcolor = Color3.fromRGB(30, 30, 30);
 	underlinecolor = "rainbow";
@@ -1455,7 +1466,7 @@ end)
 
 MainWindow:Section("--- Settings ---")
 
-MainWindow:Bind("Toggle UI Key", {default = Enum.KeyCode.RightAlt}, function()
+MainWindow:Bind("Toggle UI Key", {default = Enum.KeyCode.N}, function()
 end)
 
 local ListWindow = library:CreateWindow("Shop Items", {
@@ -1473,7 +1484,7 @@ end)
 
 ListWindow:Section("--- Item Controls ---")
 
-local shopList = nil
+local shopColumn = nil
 local function refreshItemList()
 	if State.currentTab == "Shop" then
 		ShopData:RefreshShop()
@@ -1489,12 +1500,12 @@ local function refreshItemList()
 		table.insert(names, item.name .. " [" .. item.rarity .. "]")
 	end
 
-	if shopList then
-		shopList:Refresh(names)
+	if shopColumn then
+		shopColumn:Refresh(names)
 	end
 end
 
-shopList = ListWindow:List("Items", {list = {}, maxVisible = 15, itemHeight = 22}, function(selected, rawText)
+shopColumn = ListWindow:Column("Items", {list = {}, maxVisible = 15, itemHeight = 22}, function(selected, rawText)
 	local itemName = rawText:match("^(.-) %[")
 	if itemName then
 		State.autoBuySelections[itemName] = not (State.autoBuySelections[itemName] or false)
@@ -1568,4 +1579,4 @@ MapWindow:Button("Refresh My Plot", function()
 	PlotSystem:RefreshPlot()
 end)
 
-print("[MiniWars] Part 2 UI Loaded. Press RightAlt to toggle.")
+print("[MiniWars] Part 2 UI Loaded. Press N to toggle.")
