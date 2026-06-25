@@ -25,11 +25,11 @@ GuiService.ErrorMessageChanged:Connect(function(msg)
 end)
 
 if syn and syn.queue_on_teleport then
-    syn.queue_on_teleport('loadstring(game:HttpGet("https://raw.githubusercontent.com/bericest-maker/script/refs/heads/main/script/miniwars"))()')
+    syn.queue_on_teleport(\'loadstring(game:HttpGet("https://raw.githubusercontent.com/bericest-maker/script/refs/heads/main/script/miniwars"))()\')
 elseif queue_on_teleport then
-    queue_on_teleport('loadstring(game:HttpGet("https://raw.githubusercontent.com/bericest-maker/script/refs/heads/main/script/miniwars"))()')
+    queue_on_teleport(\'loadstring(game:HttpGet("https://raw.githubusercontent.com/bericest-maker/script/refs/heads/main/script/miniwars"))()\')
 elseif fluxus and fluxus.queue_on_teleport then
-    fluxus.queue_on_teleport('loadstring(game:HttpGet("https://raw.githubusercontent.com/bericest-maker/script/refs/heads/main/script/miniwars"))()')
+    fluxus.queue_on_teleport(\'loadstring(game:HttpGet("https://raw.githubusercontent.com/bericest-maker/script/refs/heads/main/script/miniwars"))()\')
 end
 
 local CONFIG = {
@@ -107,7 +107,7 @@ function PlotSystem:GetMyPlot()
     for _, plot in ipairs(plots:GetChildren()) do
         local nameObj = Utility:SafeFindFirstChild(plot, "UI", "BillboardGui", "Holder", "PlayerName")
         if nameObj and nameObj:IsA("TextLabel") then
-            if nameObj.Text:gsub("'s Empire", "") == player.Name then return plot end
+            if nameObj.Text:gsub("\'s Empire", "") == player.Name then return plot end
         end
     end
     return nil
