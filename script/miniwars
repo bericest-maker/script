@@ -25,11 +25,11 @@ GuiService.ErrorMessageChanged:Connect(function(msg)
 end)
 
 if syn and syn.queue_on_teleport then
-    syn.queue_on_teleport(\'loadstring(game:HttpGet("https://raw.githubusercontent.com/bericest-maker/script/refs/heads/main/script/miniwars"))()\')
+    syn.queue_on_teleport([[loadstring(game:HttpGet("https://raw.githubusercontent.com/bericest-maker/script/refs/heads/main/script/miniwars"))()]])
 elseif queue_on_teleport then
-    queue_on_teleport(\'loadstring(game:HttpGet("https://raw.githubusercontent.com/bericest-maker/script/refs/heads/main/script/miniwars"))()\')
+    queue_on_teleport([[loadstring(game:HttpGet("https://raw.githubusercontent.com/bericest-maker/script/refs/heads/main/script/miniwars"))()]])
 elseif fluxus and fluxus.queue_on_teleport then
-    fluxus.queue_on_teleport(\'loadstring(game:HttpGet("https://raw.githubusercontent.com/bericest-maker/script/refs/heads/main/script/miniwars"))()\')
+    fluxus.queue_on_teleport([[loadstring(game:HttpGet("https://raw.githubusercontent.com/bericest-maker/script/refs/heads/main/script/miniwars"))()]])
 end
 
 local CONFIG = {
