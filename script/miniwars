@@ -225,34 +225,77 @@ function ShopData:FilterItems(items, query)
     return filtered
 end
 
-local PurchaseSystem = {}
+function PurchaseSystem:BuyItem(itemName)
+    local now = tick()
+    if now - State.lastBuyTime < CONFIG.BuyCooldown then
+        return false
+    end
 
-function PurchaseSystem:FindLiveBuyButton(itemName)
-    local grid = nil
-    if State.currentTab == "BlackMarket" then
-        grid = ShopData:GetBlackMarketGrid()
-    else
-        grid = ShopData:GetShopGrid()
-    end
-    
-    if not grid then
-        print("[AutoBuy] Grid not found for: " .. itemName)
-        return nil
-    end
-    
-    for _, child in ipairs(grid:GetChildren()) do
-        if child:IsA("Frame") and child.Name ~= "PadderTemplate" and child.Name ~= "Template" and child.Name ~= "UIGridLayout" then
-            local nameLabel = child:FindFirstChild("ItemName")
-            if nameLabel and nameLabel:IsA("TextLabel") and nameLabel.Text == itemName then
-                local buyBtn = child:FindFirstChild("Buy")
-                if buyBtn and (buyBtn:IsA("TextButton") or buyBtn:IsA("ImageButton")) then
-                    return buyBtn
-                end
-            end
+    local items = ShopData:GetCurrentItems()
+    local targetItem = nil
+    for _, item in ipairs(items) do
+        if item.name == itemName then
+            targetItem = item
+            break
         end
     end
-    
-    return nil
+
+    if not targetItem then
+        print("[AutoBuy] Item not in list: " .. itemName)
+        return false
+    end
+    if not targetItem.hasStock then
+        print("[AutoBuy] Item out of stock: " .. itemName)
+        return false
+    end
+
+    -- PRIMARY: Find live buy button and click it with firesignal
+    local success = false
+    if firesignal then
+        local liveBtn = self:FindLiveBuyButton(itemName)
+        if liveBtn then
+            local downEvent = liveBtn.MouseButton1Down
+            if downEvent and typeof(downEvent) == "RBXScriptSignal" then
+                firesignal(downEvent)
+                task.wait(0.05)
+                local upEvent = liveBtn.MouseButton1Up
+                if upEvent and typeof(upEvent) == "RBXScriptSignal" then firesignal(upEvent) end
+                task.wait(0.05)
+                local clickEvent = liveBtn.MouseButton1Click
+                if clickEvent and typeof(clickEvent) == "RBXScriptSignal" then firesignal(clickEvent) end
+                success = true
+                print("[AutoBuy] firesignal click: " .. itemName)
+            end
+        else
+            print("[AutoBuy] No live buy button found for: " .. itemName)
+        end
+    end
+
+    -- FALLBACK: GetBridge if firesignal didn't work
+    if not success then
+        local isBlackMarket = State.currentTab == "BlackMarket"
+        local bridgeOk, bridgeErr = pcall(function()
+            local GetBridge = require(ReplicatedStorage.util.GetBridge)
+            if isBlackMarket then
+                GetBridge("BuyFromBlackMarketShop"):Fire({shop = "BlackMarket", item = itemName})
+            else
+                GetBridge("BuyFromShop"):Fire({shop = targetItem.category or "Farm", item = itemName})
+            end
+        end)
+        if bridgeOk then
+            success = true
+            print("[AutoBuy] GetBridge fallback: " .. itemName)
+        else
+            warn("[AutoBuy] GetBridge also failed: " .. tostring(bridgeErr))
+        end
+    end
+
+    if success then
+        State.lastBuyTime = tick()
+        task.wait(0.5)
+    end
+
+    return success
 end
 
 function PurchaseSystem:BuyItem(itemName)
