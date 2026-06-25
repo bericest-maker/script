@@ -33,7 +33,7 @@ elseif fluxus and fluxus.queue_on_teleport then
 end
 
 local CONFIG = {
-    SaveKey = "ShopAutoBuy_SaveData_v22",
+    SaveKey = "ShopAutoBuy_SaveData_v23",
     RefreshInterval = 5, BuyCooldown = 0.1,
     KOTHDeployInterval = 3, AutoSaveInterval = 5,
     MapSize = 3000, MinZoom = 0.5, MaxZoom = 5, ZoomStep = 0.2,
@@ -75,7 +75,7 @@ _G.MiniWarsUtility = Utility
 local SaveSystem = {}
 function SaveSystem:Save()
     return pcall(function()
-        local d = { autoBuySelections=State.autoBuySelections, autoBuy=State.autoBuy, autoRefresh=State.autoRefresh, autoCollect=State.autoCollect, autoKOTH=State.autoKOTH, version=22 }
+        local d = { autoBuySelections=State.autoBuySelections, autoBuy=State.autoBuy, autoRefresh=State.autoRefresh, autoCollect=State.autoCollect, autoKOTH=State.autoKOTH, version=23 }
         if writefile then writefile(CONFIG.SaveKey..".json", HttpService:JSONEncode(d)) end
     end)
 end
@@ -206,14 +206,24 @@ _G.MiniWarsShopData = ShopData
 
 local PurchaseSystem = {}
 function PurchaseSystem:FindLiveBuyButton(itemName)
-    local grid = State.currentTab=="BlackMarket" and ShopData:GetBlackMarketGrid() or ShopData:GetShopGrid()
-    if not grid then return nil end
+    local grid = nil
+    if State.currentTab == "BlackMarket" then
+        grid = ShopData:GetBlackMarketGrid()
+    else
+        grid = ShopData:GetShopGrid()
+    end
+    if not grid then
+        print("[AutoBuy] Grid not found for: " .. itemName)
+        return nil
+    end
     for _, child in ipairs(grid:GetChildren()) do
-        if child:IsA("Frame") and child.Name~="PadderTemplate" and child.Name~="Template" and child.Name~="UIGridLayout" then
-            local nl = child:FindFirstChild("ItemName")
-            if nl and nl:IsA("TextLabel") and nl.Text==itemName then
-                local bb = child:FindFirstChild("Buy")
-                if bb and (bb:IsA("TextButton") or bb:IsA("ImageButton")) then return bb end
+        if child:IsA("Frame") and child.Name ~= "PadderTemplate" and child.Name ~= "Template" and child.Name ~= "UIGridLayout" then
+            local nameLabel = child:FindFirstChild("ItemName")
+            if nameLabel and nameLabel:IsA("TextLabel") and nameLabel.Text == itemName then
+                local buyBtn = child:FindFirstChild("Buy")
+                if buyBtn and (buyBtn:IsA("TextButton") or buyBtn:IsA("ImageButton")) then
+                    return buyBtn
+                end
             end
         end
     end
@@ -221,42 +231,77 @@ function PurchaseSystem:FindLiveBuyButton(itemName)
 end
 function PurchaseSystem:BuyItem(itemName)
     local now = tick()
-    if now - State.lastBuyTime < CONFIG.BuyCooldown then return false end
+    if now - State.lastBuyTime < CONFIG.BuyCooldown then
+        return false
+    end
     local items = ShopData:GetCurrentItems()
     local targetItem = nil
-    for _, item in ipairs(items) do if item.name==itemName then targetItem=item break end end
-    if not targetItem or not targetItem.hasStock then return false end
-    local isBM = State.currentTab=="BlackMarket"
+    for _, item in ipairs(items) do
+        if item.name == itemName then
+            targetItem = item
+            break
+        end
+    end
+    if not targetItem then
+        print("[AutoBuy] Item not in list: " .. itemName)
+        return false
+    end
+    if not targetItem.hasStock then
+        print("[AutoBuy] Item out of stock: " .. itemName)
+        return false
+    end
+    local isBlackMarket = State.currentTab == "BlackMarket"
     local success = false
-    local bridgeOk = pcall(function()
+    local bridgeOk, bridgeErr = pcall(function()
         local GetBridge = require(ReplicatedStorage.util.GetBridge)
-        if isBM then GetBridge("BuyFromBlackMarketShop"):Fire({shop="BlackMarket", item=itemName})
-        else GetBridge("BuyFromShop"):Fire({shop=targetItem.category or "Farm", item=itemName}) end
+        if isBlackMarket then
+            GetBridge("BuyFromBlackMarketShop"):Fire({shop = "BlackMarket", item = itemName})
+        else
+            GetBridge("BuyFromShop"):Fire({shop = targetItem.category or "Farm", item = itemName})
+        end
     end)
-    if bridgeOk then success = true end
+    if bridgeOk then
+        success = true
+        print("[AutoBuy] GetBridge purchase: " .. itemName .. (isBlackMarket and " (BlackMarket)" or " (" .. (targetItem.category or "?") .. ")"))
+    else
+        warn("[AutoBuy] GetBridge failed (" .. tostring(bridgeErr) .. "), falling back to firesignal")
+    end
     if not success and firesignal then
         local liveBtn = self:FindLiveBuyButton(itemName)
         if liveBtn then
-            local de = liveBtn.MouseButton1Down
-            if de and typeof(de)=="RBXScriptSignal" then
-                firesignal(de); task.wait(0.05)
-                local ue = liveBtn.MouseButton1Up
-                if ue and typeof(ue)=="RBXScriptSignal" then firesignal(ue) end
+            local downEvent = liveBtn.MouseButton1Down
+            if downEvent and typeof(downEvent) == "RBXScriptSignal" then
+                firesignal(downEvent)
                 task.wait(0.05)
-                local ce = liveBtn.MouseButton1Click
-                if ce and typeof(ce)=="RBXScriptSignal" then firesignal(ce) end
+                local upEvent = liveBtn.MouseButton1Up
+                if upEvent and typeof(upEvent) == "RBXScriptSignal" then firesignal(upEvent) end
+                task.wait(0.05)
+                local clickEvent = liveBtn.MouseButton1Click
+                if clickEvent and typeof(clickEvent) == "RBXScriptSignal" then firesignal(clickEvent) end
                 success = true
+                print("[AutoBuy] firesignal fallback: " .. itemName)
             end
+        else
+            print("[AutoBuy] No live buy button found for: " .. itemName)
         end
     end
-    if success then State.lastBuyTime = tick(); task.wait(0.5) end
+    if success then
+        State.lastBuyTime = tick()
+        task.wait(0.5)
+    end
     return success
 end
 function PurchaseSystem:AutoBuy()
     if not State.autoBuy then return end
-    for _, item in ipairs(ShopData:GetCurrentItems()) do
+    local items = ShopData:GetCurrentItems()
+    print("[AutoBuy] Starting. Items: " .. #items)
+    for _, item in ipairs(items) do
         if State.autoBuySelections[item.name] and item.hasStock then
-            if self:BuyItem(item.name) then task.wait(CONFIG.BuyCooldown) end
+            print("[AutoBuy] Trying: " .. item.name)
+            local bought = self:BuyItem(item.name)
+            if bought then
+                task.wait(CONFIG.BuyCooldown)
+            end
         end
     end
 end
@@ -458,6 +503,8 @@ local CollectSystem = _G.MiniWarsCollectSystem
 local MapSystem = _G.MiniWarsMapSystem
 local KOTHSystem = _G.MiniWarsKOTHSystem
 local MainLoop = _G.MiniWarsMainLoop
+
+_G._shopColumnRefresh = nil
 
 local library = {count = 0, queue = {}, callbacks = {}, rainbowtable = {}, toggled = true, binds = {}};
 local defaults; do
@@ -1450,6 +1497,9 @@ MainWindow:Section("--- Search ---")
 
 MainWindow:Box("Search Items", {type = "string"}, function(text)
 	State.searchQuery = text or ""
+	if _G._shopColumnRefresh then
+		_G._shopColumnRefresh()
+	end
 end)
 
 MainWindow:Section("--- Map ---")
@@ -1480,6 +1530,9 @@ local ListWindow = library:CreateWindow("Shop Items", {
 
 ListWindow:Dropdown("Tab", {list = {"Shop", "BlackMarket"}}, function(selected)
 	State.currentTab = selected
+	if _G._shopColumnRefresh then
+		_G._shopColumnRefresh()
+	end
 end)
 
 ListWindow:Section("--- Item Controls ---")
@@ -1497,7 +1550,9 @@ local function refreshItemList()
 
 	local names = {}
 	for _, item in ipairs(filtered) do
-		table.insert(names, item.name .. " [" .. item.rarity .. "]")
+		local selected = State.autoBuySelections[item.name] or false
+		local mark = selected and "[x] " or "[ ] "
+		table.insert(names, mark .. item.name .. " [" .. item.rarity .. "]")
 	end
 
 	if shopColumn then
@@ -1505,11 +1560,14 @@ local function refreshItemList()
 	end
 end
 
+_G._shopColumnRefresh = refreshItemList
+
 shopColumn = ListWindow:Column("Items", {list = {}, maxVisible = 15, itemHeight = 22}, function(selected, rawText)
-	local itemName = rawText:match("^(.-) %[")
+	local itemName = rawText:match("^%[.%] (.-) %[")
 	if itemName then
 		State.autoBuySelections[itemName] = not (State.autoBuySelections[itemName] or false)
 		SaveSystem:Save()
+		refreshItemList()
 	end
 end)
 
