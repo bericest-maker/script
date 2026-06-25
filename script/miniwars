@@ -485,6 +485,492 @@ player.CharacterRemoving:Connect(function() SaveSystem:Save() end)
 print("[MiniWars] Part 1 loaded. Load Part 2 for UI.")
 
 local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local HttpService = game:GetService("HttpService")
+local Workspace = game:GetService("Workspace")
+local player = Players.LocalPlayer
+local playerName = player.Name
+local GuiService = game:GetService("GuiService")
+local TeleportService = game:GetService("TeleportService")
+
+local function tryTeleport(placeId, jobId, attempts)
+    attempts = attempts or 1
+    if attempts > 5 then return end
+    local success, err = pcall(function()
+        if jobId then TeleportService:TeleportToPlaceInstance(placeId, jobId, player)
+        else TeleportService:Teleport(placeId, player) end
+    end)
+    if not success then
+        task.wait(2)
+        tryTeleport(placeId, jobId, attempts + 1)
+    end
+end
+
+GuiService.ErrorMessageChanged:Connect(function(msg)
+    if msg and msg ~= "" then tryTeleport(game.PlaceId, game.JobId) end
+end)
+
+if syn and syn.queue_on_teleport then
+    syn.queue_on_teleport('loadstring(game:HttpGet("https://raw.githubusercontent.com/bericest-maker/script/refs/heads/main/script/miniwars"))()')
+elseif queue_on_teleport then
+    queue_on_teleport('loadstring(game:HttpGet("https://raw.githubusercontent.com/bericest-maker/script/refs/heads/main/script/miniwars"))()')
+elseif fluxus and fluxus.queue_on_teleport then
+    fluxus.queue_on_teleport('loadstring(game:HttpGet("https://raw.githubusercontent.com/bericest-maker/script/refs/heads/main/script/miniwars"))()')
+end
+
+local CONFIG = {
+    SaveKey = "ShopAutoBuy_SaveData_v23",
+    RefreshInterval = 5, BuyCooldown = 0.1,
+    KOTHDeployInterval = 3, AutoSaveInterval = 5,
+    MapSize = 3000, MinZoom = 0.5, MaxZoom = 5, ZoomStep = 0.2,
+    RarityColors = {
+        Common = Color3.fromRGB(180,180,180), Uncommon = Color3.fromRGB(100,200,100),
+        Rare = Color3.fromRGB(80,150,255), Epic = Color3.fromRGB(180,80,255),
+        Legendary = Color3.fromRGB(255,180,80), Mythic = Color3.fromRGB(255,80,80),
+        Secret = Color3.fromRGB(255,50,50), Divine = Color3.fromRGB(255,215,0),
+    },
+    RarityOrder = { Divine=8, Secret=7, Mythic=6, Legendary=5, Epic=4, Rare=3, Uncommon=2, Common=1 }
+}
+
+_G.MiniWarsState = {
+    running = false, autoRefresh = true, autoBuy = false,
+    autoCollect = false, currentTab = "Shop", searchQuery = "",
+    myPlot = nil, shopItems = {}, blackMarketItems = {},
+    autoBuySelections = {}, connections = {}, threads = {},
+    isBlackMarketActive = false, lastBuyTime = 0,
+    mapZoom = 1, mapPanOffset = {x=0,y=0}, mapIsDragging = false,
+    mapDragStart = nil, mapPanStart = nil, mapBases = {},
+    autoKOTH = false, mapHovered = false,
+}
+local State = _G.MiniWarsState
+
+local Utility = {}
+function Utility:Disconnect(c) if c and typeof(c)=="RBXScriptConnection" then c:Disconnect() end end
+function Utility:DisconnectTable(t) for _,c in pairs(t or {}) do self:Disconnect(c) end end
+function Utility:CancelThread(th) if th and coroutine.status(th)~="dead" then task.cancel(th) end end
+function Utility:SafeFindFirstChild(p,...) if not p then return nil end local c=p for _,n in ipairs({...}) do c=c:FindFirstChild(n) if not c then return nil end end return c end
+function Utility:ExtractAmount(t) if not t then return 0 end local a=t:match("x([%d%.]+)") return a and tonumber(a) or 0 end
+function Utility:FormatPrice(t) if not t or t=="" then return "N/A" end t=t:gsub("^%s*",""):gsub("%s*$","") return t=="" and "N/A" or t end
+function Utility:SafeGetText(o) return (o and (o:IsA("TextLabel") or o:IsA("TextBox") or o:IsA("TextButton")) and o.Text) or "" end
+function Utility:ParseRarity(t) if not t then return "Common" end t=t:gsub("%s+",""):lower() local r={"mythic","legendary","epic","rare","uncommon","common","secret","divine"} for _,v in ipairs(r) do if t:find(v) then return v:sub(1,1):upper()..v:sub(2) end end return "Common" end
+function Utility:GetRarityColor(r) return CONFIG.RarityColors[r] or CONFIG.RarityColors.Common end
+function Utility:GetRarityValue(r) return CONFIG.RarityOrder[r] or 0 end
+function Utility:HasStock(t) if not t then return false end t=t:lower() return not (t:find("out of stock") or t:find("x0")) end
+_G.MiniWarsUtility = Utility
+
+local SaveSystem = {}
+function SaveSystem:Save()
+    return pcall(function()
+        local d = { autoBuySelections=State.autoBuySelections, autoBuy=State.autoBuy, autoRefresh=State.autoRefresh, autoCollect=State.autoCollect, autoKOTH=State.autoKOTH, version=23 }
+        if writefile then writefile(CONFIG.SaveKey..".json", HttpService:JSONEncode(d)) end
+    end)
+end
+function SaveSystem:Load()
+    pcall(function()
+        if readfile and isfile and isfile(CONFIG.SaveKey..".json") then
+            local d = HttpService:JSONDecode(readfile(CONFIG.SaveKey..".json"))
+            if d then
+                State.autoBuySelections = d.autoBuySelections or {}
+                State.autoBuy = d.autoBuy or false
+                State.autoRefresh = d.autoRefresh ~= false
+                State.autoCollect = d.autoCollect or false
+                State.autoKOTH = d.autoKOTH or false
+            end
+        end
+    end)
+end
+_G.MiniWarsSaveSystem = SaveSystem
+
+local PlotSystem = {}
+function PlotSystem:GetMyPlot()
+    local ok, GetPlotModel = pcall(function() return require(ReplicatedStorage.util.GetPlotModel) end)
+    if ok and GetPlotModel then
+        local plot = GetPlotModel(player)
+        if plot then return plot end
+    end
+    local plots = Utility:SafeFindFirstChild(workspace, "MilitaryMap", "PlayerPlots")
+    if not plots then return nil end
+    for _, plot in ipairs(plots:GetChildren()) do
+        local nameObj = Utility:SafeFindFirstChild(plot, "UI", "BillboardGui", "Holder", "PlayerName")
+        if nameObj and nameObj:IsA("TextLabel") then
+            if nameObj.Text:gsub("'s Empire", "") == player.Name then return plot end
+        end
+    end
+    return nil
+end
+function PlotSystem:RefreshPlot() State.myPlot = self:GetMyPlot() return State.myPlot end
+_G.MiniWarsPlotSystem = PlotSystem
+
+local BlackMarketSystem = {}
+function BlackMarketSystem:IsActive()
+    local door = Utility:SafeFindFirstChild(workspace, "BlackMarket", "Main", "Helicopter", "Door", "Cube.012")
+    if not door or not door:IsA("BasePart") then return false end
+    local timeValid = true
+    pcall(function()
+        local getPreviousCustomInterval = require(ReplicatedStorage.util.getPreviousCustomInterval)
+        timeValid = (workspace:GetServerTimeNow() - getPreviousCustomInterval(3600) >= 15)
+    end)
+    return door.Transparency == 0 and timeValid
+end
+function BlackMarketSystem:RefreshStatus() State.isBlackMarketActive = self:IsActive() return State.isBlackMarketActive end
+_G.MiniWarsBlackMarketSystem = BlackMarketSystem
+
+local ItemParser = {}
+function ItemParser:IsValidItem(item)
+    if not item or not item:IsA("Frame") then return false end
+    if item.Name == "PadderTemplate" or item.Name == "DontDelete" or item.Name == "Template" then return false end
+    if item:IsA("UIGridLayout") or item:IsA("UIPadding") or item:IsA("UIListLayout") then return false end
+    return item:FindFirstChild("ItemName") and item:FindFirstChild("Stock") and item:FindFirstChild("Rarity") and item:FindFirstChild("Buy")
+end
+function ItemParser:ParseItem(item)
+    if not self:IsValidItem(item) then return nil end
+    local itemName = Utility:SafeGetText(item:FindFirstChild("ItemName"))
+    local stock = Utility:SafeGetText(item:FindFirstChild("Stock"))
+    local rarity = Utility:SafeGetText(item:FindFirstChild("Rarity"))
+    local priceText = ""
+    local buyBtn = item:FindFirstChild("Buy")
+    if buyBtn then
+        local priceFrame = buyBtn:FindFirstChild("Price")
+        if priceFrame then
+            local pl = priceFrame:FindFirstChildWhichIsA("TextLabel", true)
+            if pl then priceText = pl.Text end
+        end
+    end
+    if itemName == "" then return nil end
+    local category = "Farm"
+    pcall(function()
+        local cfg = require(ReplicatedStorage:FindFirstChild("BuildingsConfig", true))[itemName]
+        if cfg and not cfg.dontDisplayInShop then category = cfg.ShopType or cfg.Type or category end
+    end)
+    return {
+        name = itemName, stock = stock, hasStock = Utility:HasStock(stock),
+        rarity = Utility:ParseRarity(rarity), rarityText = rarity,
+        rarityValue = Utility:GetRarityValue(Utility:ParseRarity(rarity)),
+        price = Utility:FormatPrice(priceText), priceFormatted = Utility:FormatPrice(priceText),
+        rawPrice = priceText, category = category,
+        instance = item, selected = State.autoBuySelections[itemName] or false,
+    }
+end
+function ItemParser:ScanItems(grid)
+    local items = {}
+    if not grid or not grid:IsA("GuiObject") then return items end
+    for _, child in ipairs(grid:GetChildren()) do
+        local parsed = self:ParseItem(child)
+        if parsed then table.insert(items, parsed) end
+    end
+    return items
+end
+_G.MiniWarsItemParser = ItemParser
+
+local ShopData = {}
+function ShopData:GetShopGrid() return Utility:SafeFindFirstChild(player, "PlayerGui", "MainUI", "Fullscreen", "BuyUI", "ItemsGrid") end
+function ShopData:GetBlackMarketGrid() return Utility:SafeFindFirstChild(player, "PlayerGui", "MainUI", "Fullscreen", "BlackMarketUI", "ItemsGrid") end
+function ShopData:RefreshShop()
+    local grid = self:GetShopGrid()
+    State.shopItems = ItemParser:ScanItems(grid)
+    self:SortItems(State.shopItems)
+    return State.shopItems
+end
+function ShopData:RefreshBlackMarket()
+    BlackMarketSystem:RefreshStatus()
+    State.blackMarketItems = ItemParser:ScanItems(self:GetBlackMarketGrid())
+    self:SortItems(State.blackMarketItems)
+    return State.blackMarketItems
+end
+function ShopData:SortItems(items)
+    table.sort(items, function(a,b) if a.hasStock~=b.hasStock then return a.hasStock end if a.rarityValue~=b.rarityValue then return a.rarityValue>b.rarityValue end return a.name<b.name end)
+end
+function ShopData:GetCurrentItems() return State.currentTab=="Shop" and State.shopItems or State.blackMarketItems end
+function ShopData:FilterItems(items, query)
+    if not query or query=="" then return items end
+    query = query:lower()
+    local filtered = {}
+    for _, item in ipairs(items) do if item.name:lower():find(query,1,true) then table.insert(filtered,item) end end
+    return filtered
+end
+_G.MiniWarsShopData = ShopData
+
+local PurchaseSystem = {}
+function PurchaseSystem:FindLiveBuyButton(itemName)
+    local grid = nil
+    if State.currentTab == "BlackMarket" then
+        grid = ShopData:GetBlackMarketGrid()
+    else
+        grid = ShopData:GetShopGrid()
+    end
+    if not grid then
+        print("[AutoBuy] Grid not found for: " .. itemName)
+        return nil
+    end
+    for _, child in ipairs(grid:GetChildren()) do
+        if child:IsA("Frame") and child.Name ~= "PadderTemplate" and child.Name ~= "Template" and child.Name ~= "UIGridLayout" then
+            local nameLabel = child:FindFirstChild("ItemName")
+            if nameLabel and nameLabel:IsA("TextLabel") and nameLabel.Text == itemName then
+                local buyBtn = child:FindFirstChild("Buy")
+                if buyBtn and (buyBtn:IsA("TextButton") or buyBtn:IsA("ImageButton")) then
+                    return buyBtn
+                end
+            end
+        end
+    end
+    return nil
+end
+function PurchaseSystem:BuyItem(itemName)
+    local now = tick()
+    if now - State.lastBuyTime < CONFIG.BuyCooldown then
+        return false
+    end
+    local items = ShopData:GetCurrentItems()
+    local targetItem = nil
+    for _, item in ipairs(items) do
+        if item.name == itemName then
+            targetItem = item
+            break
+        end
+    end
+    if not targetItem then
+        print("[AutoBuy] Item not in list: " .. itemName)
+        return false
+    end
+    if not targetItem.hasStock then
+        print("[AutoBuy] Item out of stock: " .. itemName)
+        return false
+    end
+    local isBlackMarket = State.currentTab == "BlackMarket"
+    local success = false
+    local bridgeOk, bridgeErr = pcall(function()
+        local GetBridge = require(ReplicatedStorage.util.GetBridge)
+        if isBlackMarket then
+            GetBridge("BuyFromBlackMarketShop"):Fire({shop = "BlackMarket", item = itemName})
+        else
+            GetBridge("BuyFromShop"):Fire({shop = targetItem.category or "Farm", item = itemName})
+        end
+    end)
+    if bridgeOk then
+        success = true
+        print("[AutoBuy] GetBridge purchase: " .. itemName .. (isBlackMarket and " (BlackMarket)" or " (" .. (targetItem.category or "?") .. ")"))
+    else
+        warn("[AutoBuy] GetBridge failed (" .. tostring(bridgeErr) .. "), falling back to firesignal")
+    end
+    if not success and firesignal then
+        local liveBtn = self:FindLiveBuyButton(itemName)
+        if liveBtn then
+            local downEvent = liveBtn.MouseButton1Down
+            if downEvent and typeof(downEvent) == "RBXScriptSignal" then
+                firesignal(downEvent)
+                task.wait(0.05)
+                local upEvent = liveBtn.MouseButton1Up
+                if upEvent and typeof(upEvent) == "RBXScriptSignal" then firesignal(upEvent) end
+                task.wait(0.05)
+                local clickEvent = liveBtn.MouseButton1Click
+                if clickEvent and typeof(clickEvent) == "RBXScriptSignal" then firesignal(clickEvent) end
+                success = true
+                print("[AutoBuy] firesignal fallback: " .. itemName)
+            end
+        else
+            print("[AutoBuy] No live buy button found for: " .. itemName)
+        end
+    end
+    if success then
+        State.lastBuyTime = tick()
+        task.wait(0.5)
+    end
+    return success
+end
+function PurchaseSystem:AutoBuy()
+    if not State.autoBuy then return end
+    local items = ShopData:GetCurrentItems()
+    print("[AutoBuy] Starting. Items: " .. #items)
+    for _, item in ipairs(items) do
+        if State.autoBuySelections[item.name] and item.hasStock then
+            print("[AutoBuy] Trying: " .. item.name)
+            local bought = self:BuyItem(item.name)
+            if bought then
+                task.wait(CONFIG.BuyCooldown)
+            end
+        end
+    end
+end
+_G.MiniWarsPurchaseSystem = PurchaseSystem
+
+local CollectSystem = {}
+function CollectSystem:HasValue(prompt)
+    local text = (prompt.ObjectText or "") .. " " .. (prompt.ActionText or "")
+    return Utility:ExtractAmount(text) > 0
+end
+function CollectSystem:CollectAllLoop()
+    while State.autoCollect do
+        if not State.myPlot then PlotSystem:RefreshPlot() end
+        if not State.myPlot then task.wait(2) continue end
+
+        local ok, GetBridge = pcall(function() return require(ReplicatedStorage.util.GetBridge) end)
+        local ok2, GetPlotModel = pcall(function() return require(ReplicatedStorage.util.GetPlotModel) end)
+        if ok and ok2 and GetBridge and GetPlotModel then
+            local bridge = GetBridge("CollectResources")
+            local plot = GetPlotModel(player)
+            if plot then
+                local buildings = plot:WaitForChild("Plot", 3)
+                if buildings then
+                    buildings = buildings:WaitForChild("Buildings", 3)
+                end
+                if buildings then
+                    for _, building in ipairs(buildings:GetChildren()) do
+                        local buildingType = building:GetAttribute("type")
+                        local resources = building:GetAttribute("ResourcesToCollect") or 0
+                        local stored = building:GetAttribute("StoredItems") or 0
+                        local hasResources = resources > 0 or stored > 0
+                        local isCollectable = buildingType == "Farm" or buildingType == "GemMine" or buildingType == "CloneFacility" or buildingType == "Storage" or building.Name == "Vault"
+                        if isCollectable and hasResources then
+                            pcall(function() bridge:Fire(building) end)
+                            task.wait(0.05)
+                        end
+                    end
+                end
+            end
+        end
+
+        for _, desc in ipairs(State.myPlot:GetDescendants()) do
+            if desc:IsA("ProximityPrompt") and self:HasValue(desc) then
+                pcall(function() fireproximityprompt(desc) end)
+                task.wait(0.05)
+            end
+        end
+        task.wait(0.5)
+    end
+end
+_G.MiniWarsCollectSystem = CollectSystem
+
+local MapSystem = {}
+function MapSystem:scanBases()
+    local bases = {}
+    local mm = Workspace:FindFirstChild("MilitaryMap")
+    if not mm then return bases end
+    for _, obj in ipairs(mm:GetDescendants()) do
+        if obj:IsA("Model") and obj:GetAttribute("Owner") ~= nil then
+            local owner = obj:GetAttribute("Owner")
+            local pp = obj.PrimaryPart
+            table.insert(bases, {
+                name = obj.Name, instance = obj, owner = owner,
+                baseType = obj:GetAttribute("baseType") or "Unknown",
+                position = pp and pp.Position or obj:GetPivot().Position,
+                isMine = (owner == playerName),
+                isUnclaimed = (owner == "" or owner == "server" or owner == nil),
+            })
+        end
+    end
+    return bases
+end
+function MapSystem:worldToMap(pos)
+    local ms = CONFIG.MapSize / State.mapZoom
+    local rel = pos - Vector3.new(0,0,0)
+    return (rel.X/ms)+0.5+State.mapPanOffset.x, (rel.Z/ms)+0.5+State.mapPanOffset.y
+end
+function MapSystem:captureBase(base)
+    if not base or not base.instance or not base.instance.Parent then return false end
+    local ok, GetBridge = pcall(function() return require(ReplicatedStorage.util.GetBridge) end)
+    if not ok or not GetBridge then return false end
+    pcall(function() GetBridge("SendRocketsToPoint"):Fire({capturePoint=base.instance}) end)
+    task.wait(0.05)
+    for i = 1, 4 do pcall(function() GetBridge("SendTroopsToPoint"):Fire({armyIndex=i, capturePoint=base.instance}) end) task.wait(0.05) end
+    return true
+end
+_G.MiniWarsMapSystem = MapSystem
+
+local KOTHSystem = {}
+function KOTHSystem:getKOTHModels()
+    local models = {}
+    local sf = Utility:SafeFindFirstChild(workspace, "MilitaryMap", "Object", "Special")
+    if not sf then return models end
+    for _, child in ipairs(sf:GetChildren()) do
+        if child:IsA("Model") and (child.Name=="KingOfTheHillBase" or child.Name=="ToxicKingOfTheHillBase") then
+            table.insert(models, {name=child.Name=="ToxicKingOfTheHillBase" and "Toxic KOTH" or "KOTH", instance=child, isToxic=child.Name=="ToxicKingOfTheHillBase"})
+        end
+    end
+    return models
+end
+function KOTHSystem:deployToKOTH(km)
+    if not km or not km.Parent then return false end
+    local ok, GetBridge = pcall(function() return require(ReplicatedStorage.util.GetBridge) end)
+    if not ok or not GetBridge then return false end
+    pcall(function() GetBridge("SendRocketsToPoint"):Fire({capturePoint=km}) end)
+    task.wait(0.05)
+    for i = 1, 4 do pcall(function() GetBridge("SendTroopsToPoint"):Fire({armyIndex=i, capturePoint=km}) end) task.wait(0.05) end
+    return true
+end
+function KOTHSystem:AutoKOTHLoop()
+    while State.running do
+        if State.autoKOTH then for _, m in ipairs(self:getKOTHModels()) do self:deployToKOTH(m.instance) end end
+        task.wait(15)
+    end
+end
+function KOTHSystem:TownReturnLoop()
+    local hadKOTH = false
+    while State.running do
+        local hasKOTH = false
+        pcall(function()
+            for _, c in ipairs(workspace.MilitaryMap.Object.Special:GetChildren()) do
+                if c.Name=="KingOfTheHillBase" or c.Name=="ToxicKingOfTheHillBase" then hasKOTH=true break end
+            end
+        end)
+        if hadKOTH and not hasKOTH then
+            pcall(function()
+                local GetBridge = require(ReplicatedStorage.util.GetBridge)
+                local town = workspace.MilitaryMap.Object.MilitaryTown.Town
+                GetBridge("SendRocketsToPoint"):Fire({capturePoint=town})
+                for i = 1, 4 do GetBridge("SendTroopsToPoint"):Fire({armyIndex=i, capturePoint=town}) task.wait(0.05) end
+            end)
+        end
+        hadKOTH = hasKOTH; task.wait(10)
+    end
+end
+_G.MiniWarsKOTHSystem = KOTHSystem
+
+local MainLoop = {}
+function MainLoop:StartRefreshLoop()
+    table.insert(State.threads, task.spawn(function()
+        while State.running do
+            if State.autoRefresh and (State.currentTab=="Shop" or State.currentTab=="BlackMarket") then
+                if State.currentTab=="Shop" then ShopData:RefreshShop() else ShopData:RefreshBlackMarket() end
+            end
+            task.wait(CONFIG.RefreshInterval)
+        end
+    end))
+end
+function MainLoop:StartAutoBuyLoop()
+    table.insert(State.threads, task.spawn(function()
+        while State.running do if State.autoBuy then PurchaseSystem:AutoBuy() end task.wait(1) end
+    end))
+end
+function MainLoop:StartAutoSaveLoop()
+    table.insert(State.threads, task.spawn(function()
+        while State.running do task.wait(CONFIG.AutoSaveInterval) SaveSystem:Save() end
+    end))
+end
+function MainLoop:StartKOTHLoops()
+    table.insert(State.threads, task.spawn(function() KOTHSystem:AutoKOTHLoop() end))
+    table.insert(State.threads, task.spawn(function() KOTHSystem:TownReturnLoop() end))
+end
+_G.MiniWarsMainLoop = MainLoop
+
+SaveSystem:Load()
+State.running = true
+MainLoop:StartRefreshLoop()
+MainLoop:StartAutoBuyLoop()
+MainLoop:StartAutoSaveLoop()
+MainLoop:StartKOTHLoops()
+if State.autoCollect then table.insert(State.threads, task.spawn(function() CollectSystem:CollectAllLoop() end)) end
+
+pcall(function()
+    local GetBridge = require(ReplicatedStorage.util.GetBridge)
+    local town = workspace.MilitaryMap.Object.MilitaryTown.Town
+    GetBridge("SendRocketsToPoint"):Fire({capturePoint=town})
+    for i = 1, 4 do GetBridge("SendTroopsToPoint"):Fire({armyIndex=i, capturePoint=town}) task.wait(0.05) end
+end)
+
+player.CharacterRemoving:Connect(function() SaveSystem:Save() end)
+print("[MiniWars] Part 1 loaded. Load Part 2 for UI.")
+
+local Players = game:GetService("Players")
 local player = Players.LocalPlayer
 local RunService = game:GetService("RunService")
 local HttpService = game:GetService("HttpService")
