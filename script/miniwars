@@ -33,7 +33,7 @@ elseif fluxus and fluxus.queue_on_teleport then
 end
 
 local CONFIG = {
-    SaveKey = "ShopAutoBuy_SaveData_v20",
+    SaveKey = "ShopAutoBuy_SaveData_v21",
     RefreshInterval = 5, BuyCooldown = 0.1,
     KOTHDeployInterval = 3, AutoSaveInterval = 5,
     MapSize = 3000, MinZoom = 0.5, MaxZoom = 5, ZoomStep = 0.2,
@@ -75,7 +75,7 @@ _G.MiniWarsUtility = Utility
 local SaveSystem = {}
 function SaveSystem:Save()
     return pcall(function()
-        local d = { autoBuySelections=State.autoBuySelections, autoBuy=State.autoBuy, autoRefresh=State.autoRefresh, autoCollect=State.autoCollect, autoKOTH=State.autoKOTH, version=20 }
+        local d = { autoBuySelections=State.autoBuySelections, autoBuy=State.autoBuy, autoRefresh=State.autoRefresh, autoCollect=State.autoCollect, autoKOTH=State.autoKOTH, version=21 }
         if writefile then writefile(CONFIG.SaveKey..".json", HttpService:JSONEncode(d)) end
     end)
 end
@@ -97,6 +97,11 @@ _G.MiniWarsSaveSystem = SaveSystem
 
 local PlotSystem = {}
 function PlotSystem:GetMyPlot()
+    local ok, GetPlotModel = pcall(function() return require(ReplicatedStorage.util.GetPlotModel) end)
+    if ok and GetPlotModel then
+        local plot = GetPlotModel(player)
+        if plot then return plot end
+    end
     local plots = Utility:SafeFindFirstChild(workspace, "MilitaryMap", "PlayerPlots")
     if not plots then return nil end
     for _, plot in ipairs(plots:GetChildren()) do
@@ -262,28 +267,37 @@ function CollectSystem:HasValue(prompt)
     local text = (prompt.ObjectText or "") .. " " .. (prompt.ActionText or "")
     return Utility:ExtractAmount(text) > 0
 end
-function CollectSystem:GetBestTargets(hrp)
-    if not State.myPlot then PlotSystem:RefreshPlot() end
-    if not State.myPlot then return {} end
-    local targets = {}
-    for _, desc in ipairs(State.myPlot:GetDescendants()) do
-        if desc:IsA("ProximityPrompt") and self:HasValue(desc) then
-            local part = desc.Parent
-            local ok, pos = pcall(function() return part.GetPivot and part:GetPivot().Position or part.Position end)
-            if ok and pos then
-                local dist = (pos - hrp.Position).Magnitude
-                local text = (desc.ObjectText or "") .. " " .. (desc.ActionText or "")
-                table.insert(targets, {building=part, prompt=desc, pos=pos, value=Utility:ExtractAmount(text), gem=part.Name=="GemMine", dist=dist})
-            end
-        end
-    end
-    table.sort(targets, function(a,b) if a.gem~=b.gem then return a.gem end if a.value~=b.value then return a.value>b.value end return a.dist<b.dist end)
-    return targets
-end
 function CollectSystem:CollectAllLoop()
     while State.autoCollect do
         if not State.myPlot then PlotSystem:RefreshPlot() end
         if not State.myPlot then task.wait(2) continue end
+
+        local ok, GetBridge = pcall(function() return require(ReplicatedStorage.util.GetBridge) end)
+        local ok2, GetPlotModel = pcall(function() return require(ReplicatedStorage.util.GetPlotModel) end)
+        if ok and ok2 and GetBridge and GetPlotModel then
+            local bridge = GetBridge("CollectResources")
+            local plot = GetPlotModel(player)
+            if plot then
+                local buildings = plot:WaitForChild("Plot", 3)
+                if buildings then
+                    buildings = buildings:WaitForChild("Buildings", 3)
+                end
+                if buildings then
+                    for _, building in ipairs(buildings:GetChildren()) do
+                        local buildingType = building:GetAttribute("type")
+                        local resources = building:GetAttribute("ResourcesToCollect") or 0
+                        local stored = building:GetAttribute("StoredItems") or 0
+                        local hasResources = resources > 0 or stored > 0
+                        local isCollectable = buildingType == "Farm" or buildingType == "GemMine" or buildingType == "CloneFacility" or buildingType == "Storage" or building.Name == "Vault"
+                        if isCollectable and hasResources then
+                            pcall(function() bridge:Fire(building) end)
+                            task.wait(0.05)
+                        end
+                    end
+                end
+            end
+        end
+
         for _, desc in ipairs(State.myPlot:GetDescendants()) do
             if desc:IsA("ProximityPrompt") and self:HasValue(desc) then
                 pcall(function() fireproximityprompt(desc) end)
@@ -429,6 +443,7 @@ local Players = game:GetService("Players")
 local player = Players.LocalPlayer
 local RunService = game:GetService("RunService")
 local HttpService = game:GetService("HttpService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local State = _G.MiniWarsState
 local Utility = _G.MiniWarsUtility
@@ -476,7 +491,7 @@ local defaults; do
 		end
 		game:GetService('UserInputService').InputBegan:connect(function(key, gpe)
 			if (not gpe) then
-				if key.KeyCode == Enum.KeyCode.RightShift then
+				if key.KeyCode == Enum.KeyCode.RightAlt then
 					library.toggled = not library.toggled;
 					for i, data in next, library.queue do
 						local pos = (library.toggled and data.p or UDim2.new(-1, 0, -0.5,0))
@@ -1179,6 +1194,85 @@ local defaults; do
 			end
 			return {Refresh = reload;}
 		end
+		function types:List(name, options, callback)
+			local location = options.location or self.flags;
+			local flag = options.flag or "";
+			local callback = callback or function() end;
+			local list = options.list or {};
+			local maxVisible = options.maxVisible or 10;
+			local itemHeight = options.itemHeight or 20;
+			location[flag] = list[1] or "";
+			local check = library:Create('Frame', {
+				BackgroundTransparency = 1;
+				Size = UDim2.new(1, 0, 0, 25 + (math.min(#list, maxVisible) * itemHeight));
+				LayoutOrder = self:GetOrder();
+				library:Create('TextLabel', {
+					Name = name;
+					Text = "\r" .. name;
+					BackgroundTransparency = 1;
+					TextColor3 = library.options.textcolor;
+					Position = UDim2.new(0, 5, 0, 0);
+					Size = UDim2.new(1, -5, 0, 20);
+					TextXAlignment = Enum.TextXAlignment.Left;
+					Font = library.options.font;
+					TextSize = library.options.fontsize;
+					TextStrokeTransparency = library.options.textstroke;
+					TextStrokeColor3 = library.options.strokecolor;
+				});
+				library:Create('ScrollingFrame', {
+					Name = 'ListContainer';
+					Position = UDim2.new(0, 5, 0, 22);
+					Size = UDim2.new(1, -10, 0, math.min(#list, maxVisible) * itemHeight);
+					BackgroundColor3 = library.options.bgcolor;
+					BorderColor3 = library.options.bordercolor;
+					ScrollBarThickness = (#list > maxVisible and 5 or 0);
+					CanvasSize = UDim2.new(0, 0, 0, #list * itemHeight);
+					ZIndex = 3;
+					library:Create('UIListLayout', {
+						Name = 'List';
+						SortOrder = Enum.SortOrder.LayoutOrder;
+					});
+					Parent = check;
+				});
+				Parent = self.container;
+			});
+			local listContainer = check:FindFirstChild('ListContainer');
+			local function buildList(newList)
+				list = newList or list;
+				for _, child in ipairs(listContainer:GetChildren()) do
+					if child:IsA('TextButton') then child:Destroy(); end
+				end
+				for i, v in ipairs(list) do
+					local btn = library:Create('TextButton', {
+						Size = UDim2.new(1, 0, 0, itemHeight);
+						BackgroundColor3 = library.options.btncolor;
+						BorderColor3 = library.options.bordercolor;
+						Text = v;
+						Font = library.options.font;
+						TextSize = library.options.fontsize;
+						LayoutOrder = i;
+						Parent = listContainer;
+						ZIndex = 3;
+						TextColor3 = library.options.textcolor;
+						TextStrokeTransparency = library.options.textstroke;
+						TextStrokeColor3 = library.options.strokecolor;
+					})
+					btn.MouseButton1Click:connect(function()
+						location[flag] = tostring(btn.Text);
+						callback(location[flag], btn.Text);
+					end)
+				end
+				listContainer.CanvasSize = UDim2.new(0, 0, 0, #list * itemHeight);
+				listContainer.ScrollBarThickness = (#list > maxVisible and 5 or 0);
+				check.Size = UDim2.new(1, 0, 0, 25 + (math.min(#list, maxVisible) * itemHeight));
+			end
+			buildList(list);
+			self:Resize();
+			return {
+				Refresh = function(self, newList) buildList(newList); end,
+				GetSelected = function() return location[flag]; end
+			}
+		end
 	end
 
 	function library:Create(class, data)
@@ -1361,7 +1455,7 @@ end)
 
 MainWindow:Section("--- Settings ---")
 
-MainWindow:Bind("Toggle UI Key", {default = Enum.KeyCode.RightShift}, function()
+MainWindow:Bind("Toggle UI Key", {default = Enum.KeyCode.RightAlt}, function()
 end)
 
 local ListWindow = library:CreateWindow("Shop Items", {
@@ -1379,15 +1473,8 @@ end)
 
 ListWindow:Section("--- Item Controls ---")
 
-local itemToggles = {}
+local shopList = nil
 local function refreshItemList()
-	for _, toggleData in ipairs(itemToggles) do
-		if toggleData.frame and toggleData.frame.Parent then
-			toggleData.frame:Destroy()
-		end
-	end
-	itemToggles = {}
-
 	if State.currentTab == "Shop" then
 		ShopData:RefreshShop()
 	else
@@ -1397,18 +1484,23 @@ local function refreshItemList()
 	local items = ShopData:GetCurrentItems()
 	local filtered = ShopData:FilterItems(items, State.searchQuery)
 
-	local maxItems = math.min(#filtered, 15)
-	for i = 1, maxItems do
-		local item = filtered[i]
-		local toggleObj = ListWindow:Toggle(item.name .. " [" .. item.rarity .. "]", {
-			default = State.autoBuySelections[item.name] or false
-		}, function(state)
-			State.autoBuySelections[item.name] = state
-			SaveSystem:Save()
-		end)
-		table.insert(itemToggles, {frame = toggleObj, item = item})
+	local names = {}
+	for _, item in ipairs(filtered) do
+		table.insert(names, item.name .. " [" .. item.rarity .. "]")
+	end
+
+	if shopList then
+		shopList:Refresh(names)
 	end
 end
+
+shopList = ListWindow:List("Items", {list = {}, maxVisible = 15, itemHeight = 22}, function(selected, rawText)
+	local itemName = rawText:match("^(.-) %[")
+	if itemName then
+		State.autoBuySelections[itemName] = not (State.autoBuySelections[itemName] or false)
+		SaveSystem:Save()
+	end
+end)
 
 ListWindow:Button("Refresh Item List", function()
 	refreshItemList()
@@ -1476,4 +1568,4 @@ MapWindow:Button("Refresh My Plot", function()
 	PlotSystem:RefreshPlot()
 end)
 
-print("[MiniWars] Part 2 UI Loaded. Press RightShift to toggle.")
+print("[MiniWars] Part 2 UI Loaded. Press RightAlt to toggle.")
