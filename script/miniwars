@@ -463,9 +463,10 @@ local MainLoop = {}
 function MainLoop:StartRefreshLoop()
     table.insert(State.threads, task.spawn(function()
         while State.running do
-            if State.autoRefresh and (State.currentTab=="Shop" or State.currentTab=="BlackMarket") then
-                print("[Refresh] Refreshing " .. State.currentTab) -- DEBUG
-                if State.currentTab=="Shop" then ShopData:RefreshShop() else ShopData:RefreshBlackMarket() end
+            if State.autoRefresh then
+                print("[Refresh] Refreshing Shop + BlackMarket")
+                ShopData:RefreshShop()
+                ShopData:RefreshBlackMarket()
                 if _G._shopColumnRefresh then _G._shopColumnRefresh() end
             end
             task.wait(CONFIG.RefreshInterval)
