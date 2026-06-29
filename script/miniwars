@@ -211,7 +211,6 @@ _G.MiniWarsShopData = ShopData
 local PurchaseSystem = {}
 
 function PurchaseSystem:FindLiveBuyButton(itemName)
-    -- Search BOTH grids regardless of current tab
     local shopGrid = ShopData:GetShopGrid()
     local bmGrid = ShopData:GetBlackMarketGrid()
     
@@ -252,7 +251,6 @@ function PurchaseSystem:BuyItem(itemName)
         return false
     end
 
-    -- Search in BOTH item lists to find the item
     local targetItem = nil
     local itemSource = nil
     
@@ -283,7 +281,6 @@ function PurchaseSystem:BuyItem(itemName)
         return false
     end
 
-    -- PRIMARY: firesignal on live buy button (search BOTH grids)
     local success = false
     if firesignal then
         local liveBtn, detectedSource = self:FindLiveBuyButton(itemName)
@@ -305,7 +302,6 @@ function PurchaseSystem:BuyItem(itemName)
         end
     end
 
-    -- FALLBACK: GetBridge (use detected source, not currentTab)
     if not success then
         local bridgeOk, bridgeErr = pcall(function()
             local GetBridge = require(ReplicatedStorage.util.GetBridge)
@@ -335,7 +331,6 @@ end
 function PurchaseSystem:AutoBuy()
     if not State.autoBuy then return end
     
-    -- Combine BOTH lists so we buy from Shop AND BlackMarket
     local allItems = {}
     for _, item in ipairs(State.shopItems) do
         table.insert(allItems, item)
@@ -347,21 +342,6 @@ function PurchaseSystem:AutoBuy()
     print("[AutoBuy] Starting. Total items: " .. #allItems .. " (Shop: " .. #State.shopItems .. ", BM: " .. #State.blackMarketItems .. ")")
     
     for _, item in ipairs(allItems) do
-        if State.autoBuySelections[item.name] and item.hasStock then
-            print("[AutoBuy] Trying: " .. item.name)
-            local bought = self:BuyItem(item.name)
-            if bought then
-                task.wait(CONFIG.BuyCooldown)
-            end
-        end
-    end
-end
-
-function PurchaseSystem:AutoBuy()
-    if not State.autoBuy then return end
-    local items = ShopData:GetCurrentItems()
-    print("[AutoBuy] Starting. Items: " .. #items)
-    for _, item in ipairs(items) do
         if State.autoBuySelections[item.name] and item.hasStock then
             print("[AutoBuy] Trying: " .. item.name)
             local bought = self:BuyItem(item.name)
