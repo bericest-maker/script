@@ -210,24 +210,8 @@ _G.MiniWarsShopData = ShopData
 
 local PurchaseSystem = {}
 
-function PurchaseSystem:FindLiveBuyButton(itemName, specificGrid)
-    -- If a specific grid is provided, search only that
-    if specificGrid then
-        for _, child in ipairs(specificGrid:GetChildren()) do
-            if child:IsA("Frame") and child.Name ~= "PadderTemplate" and child.Name ~= "Template" and child.Name ~= "UIGridLayout" then
-                local nameLabel = child:FindFirstChild("ItemName")
-                if nameLabel and nameLabel:IsA("TextLabel") and nameLabel.Text == itemName then
-                    local buyBtn = child:FindFirstChild("Buy")
-                    if buyBtn and (buyBtn:IsA("TextButton") or buyBtn:IsA("ImageButton")) then
-                        return buyBtn
-                    end
-                end
-            end
-        end
-        return nil
-    end
-    
-    -- Otherwise search BOTH grids
+function PurchaseSystem:FindLiveBuyButton(itemName)
+    -- Search BOTH grids regardless of current tab
     local shopGrid = ShopData:GetShopGrid()
     local bmGrid = ShopData:GetBlackMarketGrid()
     
@@ -331,7 +315,47 @@ function PurchaseSystem:BuyItem(itemName)
             else
                 GetBridge("BuyFromShop"):Fire({shop = targetItem.category or "Farm", item = itemName})
             end
-       
+        end)
+        if bridgeOk then
+            success = true
+            print("[AutoBuy] GetBridge fallback: " .. itemName .. " (source: " .. itemSource .. ")")
+        else
+            warn("[AutoBuy] GetBridge also failed: " .. tostring(bridgeErr))
+        end
+    end
+
+    if success then
+        State.lastBuyTime = tick()
+        task.wait(0.5)
+    end
+
+    return success
+end
+
+function PurchaseSystem:AutoBuy()
+    if not State.autoBuy then return end
+    
+    -- Combine BOTH lists so we buy from Shop AND BlackMarket
+    local allItems = {}
+    for _, item in ipairs(State.shopItems) do
+        table.insert(allItems, item)
+    end
+    for _, item in ipairs(State.blackMarketItems) do
+        table.insert(allItems, item)
+    end
+    
+    print("[AutoBuy] Starting. Total items: " .. #allItems .. " (Shop: " .. #State.shopItems .. ", BM: " .. #State.blackMarketItems .. ")")
+    
+    for _, item in ipairs(allItems) do
+        if State.autoBuySelections[item.name] and item.hasStock then
+            print("[AutoBuy] Trying: " .. item.name)
+            local bought = self:BuyItem(item.name)
+            if bought then
+                task.wait(CONFIG.BuyCooldown)
+            end
+        end
+    end
+end
 
 function PurchaseSystem:AutoBuy()
     if not State.autoBuy then return end
