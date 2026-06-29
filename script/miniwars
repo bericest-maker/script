@@ -1599,11 +1599,8 @@ ListWindow:Section("--- Item Controls ---")
 
 local shopColumn = nil
 local function refreshItemList()
-	if State.currentTab == "Shop" then
-		ShopData:RefreshShop()
-	else
-		ShopData:RefreshBlackMarket()
-	end
+	ShopData:RefreshShop()
+	ShopData:RefreshBlackMarket()
 
 	local items = ShopData:GetCurrentItems()
 	local filtered = ShopData:FilterItems(items, State.searchQuery)
