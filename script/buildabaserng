@@ -1,0 +1,606 @@
+-- MiniWars Utility UI v7
+-- Close top-right | Roll Skip | Auto Hit | Lag Cleaner (DESTROY mode)
+
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+
+-- Clean up old UI
+local oldGui = PlayerGui:FindFirstChild("MiniWarsUtils")
+if oldGui then
+    oldGui:Destroy()
+end
+
+-- Create UI
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "MiniWarsUtils"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.Parent = PlayerGui
+
+local Frame = Instance.new("Frame")
+Frame.Size = UDim2.new(0, 280, 0, 70)
+Frame.Position = UDim2.new(0.5, -140, 0.5, -35)
+Frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+Frame.BorderSizePixel = 0
+Frame.Parent = ScreenGui
+
+local Corner = Instance.new("UICorner")
+Corner.CornerRadius = UDim.new(0, 10)
+Corner.Parent = Frame
+
+-- Close Button (top-right, small X)
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Name = "Close"
+CloseBtn.Size = UDim2.new(0, 24, 0, 24)
+CloseBtn.Position = UDim2.new(1, -28, 0, 4)
+CloseBtn.BackgroundColor3 = Color3.fromRGB(139, 0, 0)
+CloseBtn.BorderSizePixel = 0
+CloseBtn.Text = "X"
+CloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+CloseBtn.TextSize = 14
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.Parent = Frame
+
+local CloseCorner = Instance.new("UICorner")
+CloseCorner.CornerRadius = UDim.new(0, 6)
+CloseCorner.Parent = CloseBtn
+
+-- Button 1: Roll Skip (Green = OFF, Red = ON)
+local RollBtn = Instance.new("TextButton")
+RollBtn.Name = "RollSkip"
+RollBtn.Size = UDim2.new(0, 80, 0, 40)
+RollBtn.Position = UDim2.new(0, 10, 0.5, -20)
+RollBtn.BackgroundColor3 = Color3.fromRGB(0, 200, 0)
+RollBtn.BorderSizePixel = 0
+RollBtn.Text = "ROLL"
+RollBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+RollBtn.TextSize = 12
+RollBtn.Font = Enum.Font.GothamBold
+RollBtn.Parent = Frame
+
+local RollCorner = Instance.new("UICorner")
+RollCorner.CornerRadius = UDim.new(0, 6)
+RollCorner.Parent = RollBtn
+
+-- Button 2: Auto Hit (Green = OFF, Red = ON)
+local HitBtn = Instance.new("TextButton")
+HitBtn.Name = "AutoHit"
+HitBtn.Size = UDim2.new(0, 80, 0, 40)
+HitBtn.Position = UDim2.new(0.5, -40, 0.5, -20)
+HitBtn.BackgroundColor3 = Color3.fromRGB(0, 200, 0)
+HitBtn.BorderSizePixel = 0
+HitBtn.Text = "HIT"
+HitBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+HitBtn.TextSize = 12
+HitBtn.Font = Enum.Font.GothamBold
+HitBtn.Parent = Frame
+
+local HitCorner = Instance.new("UICorner")
+HitCorner.CornerRadius = UDim.new(0, 6)
+HitCorner.Parent = HitBtn
+
+-- Button 3: Lag Clean (Blue = OFF, Cyan = ON)
+local CleanBtn = Instance.new("TextButton")
+CleanBtn.Name = "LagClean"
+CleanBtn.Size = UDim2.new(0, 80, 0, 40)
+CleanBtn.Position = UDim2.new(1, -90, 0.5, -20)
+CleanBtn.BackgroundColor3 = Color3.fromRGB(30, 60, 150)
+CleanBtn.BorderSizePixel = 0
+CleanBtn.Text = "CLEAN"
+CleanBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+CleanBtn.TextSize = 12
+CleanBtn.Font = Enum.Font.GothamBold
+CleanBtn.Parent = Frame
+
+local CleanCorner = Instance.new("UICorner")
+CleanCorner.CornerRadius = UDim.new(0, 6)
+CleanCorner.Parent = CleanBtn
+
+-- ==================== ROLL SKIP SYSTEM ====================
+
+local rollSkipping = false
+local rollHooksActive = false
+local origRenderSteppedWait = nil
+local origHeartbeatWait = nil
+local origTweenCreate = nil
+local origTaskDelay = nil
+local origTaskWait = nil
+local rollSkipConnection = nil
+
+local function enableRollHooks()
+    if rollHooksActive then return end
+    rollHooksActive = true
+
+    local rs = RunService.RenderStepped
+    origRenderSteppedWait = rs.Wait
+    rs.Wait = function(self)
+        if rollSkipping then
+            return 999
+        end
+        return origRenderSteppedWait(self)
+    end
+
+    local hb = RunService.Heartbeat
+    origHeartbeatWait = hb.Wait
+    hb.Wait = function(self)
+        if rollSkipping then
+            return 999
+        end
+        return origHeartbeatWait(self)
+    end
+
+    origTweenCreate = TweenService.Create
+    TweenService.Create = function(self, instance, tweenInfo, propertyTable)
+        if rollSkipping then
+            for prop, val in pairs(propertyTable) do
+                pcall(function()
+                    instance[prop] = val
+                end)
+            end
+            return {
+                Play = function() end,
+                Stop = function() end,
+                Pause = function() end,
+                Completed = Instance.new("BindableEvent")
+            }
+        end
+        return origTweenCreate(self, instance, tweenInfo, propertyTable)
+    end
+
+    origTaskDelay = task.delay
+    task.delay = function(delayTime, callback, ...)
+        if rollSkipping then
+            return task.spawn(callback, ...)
+        end
+        return origTaskDelay(delayTime, callback, ...)
+    end
+
+    origTaskWait = task.wait
+    task.wait = function(delayTime)
+        if rollSkipping then
+            return 0
+        end
+        return origTaskWait(delayTime)
+    end
+end
+
+local function disableRollHooks()
+    if not rollHooksActive then return end
+    rollHooksActive = false
+
+    if origRenderSteppedWait then
+        RunService.RenderStepped.Wait = origRenderSteppedWait
+    end
+    if origHeartbeatWait then
+        RunService.Heartbeat.Wait = origHeartbeatWait
+    end
+    if origTweenCreate then
+        TweenService.Create = origTweenCreate
+    end
+    if origTaskDelay then
+        task.delay = origTaskDelay
+    end
+    if origTaskWait then
+        task.wait = origTaskWait
+    end
+end
+
+local function setupRollModuleHooks()
+    local success, ClientRollModule = pcall(function()
+        return require(ReplicatedStorage.Modules.Gameplay.ClientRollModule)
+    end)
+    
+    if success and ClientRollModule then
+        local origPlayRoll = ClientRollModule.PlayRoll
+        ClientRollModule.PlayRoll = function(container, columns)
+            if rollSkipping then
+                local uid = origPlayRoll(container, columns)
+                task.spawn(function()
+                    local roll = ClientRollModule.GetRoll(uid)
+                    if roll and roll.Active then
+                        if roll.Spin then
+                            pcall(function()
+                                roll.Spin.Visible = false
+                            end)
+                        end
+                        roll.Active = false
+                    end
+                end)
+                return uid
+            end
+            return origPlayRoll(container, columns)
+        end
+        
+        local origGetDuration = ClientRollModule.GetRollDuration
+        ClientRollModule.GetRollDuration = function()
+            if rollSkipping then
+                return 0.001
+            end
+            return origGetDuration()
+        end
+        
+        local origWaitEnd = ClientRollModule.WaitForRollEnd
+        ClientRollModule.WaitForRollEnd = function()
+            if rollSkipping then
+                return
+            end
+            return origWaitEnd()
+        end
+    end
+end
+
+pcall(setupRollModuleHooks)
+
+local function startRollSkip()
+    rollSkipping = true
+    RollBtn.BackgroundColor3 = Color3.fromRGB(220, 0, 0)
+    enableRollHooks()
+    
+    pcall(function()
+        require(ReplicatedStorage.Modules.Gameplay.ClientRollModule).RollingEnabled = true
+    end)
+    pcall(function()
+        require(ReplicatedStorage.Modules.Gameplay.ClientPackRollModule).RollingEnabled = true
+    end)
+    
+    rollSkipConnection = RunService.Heartbeat:Connect(function()
+        if not rollSkipping then return end
+        
+        local BigRoller = PlayerGui:FindFirstChild("BigRoller")
+        if BigRoller then
+            BigRoller.Enabled = false
+        end
+        
+        local PackRoller = PlayerGui:FindFirstChild("PackRoller")
+        if PackRoller then
+            PackRoller.Enabled = false
+        end
+        
+        local SoundService = game:GetService("SoundService")
+        local Ui = SoundService:FindFirstChild("Ui")
+        if Ui then
+            for _, sound in pairs(Ui:GetDescendants()) do
+                if sound:IsA("Sound") and (sound.Name:find("Roll") or sound.Name:find("Tick") or sound.Name:find("Reveal") or sound.Name:find("Whoosh") or sound.Name:find("PowerRoll")) then
+                    sound.Volume = 0
+                end
+            end
+        end
+        
+        local Hud = PlayerGui:FindFirstChild("HUD")
+        if Hud then
+            for _, child in pairs(Hud:GetDescendants()) do
+                if child.Name:find("Meteor") or child.Name:find("Confetti") or child.Name:find("Jackpot") then
+                    if child:IsA("GuiObject") then
+                        child.Visible = false
+                    end
+                end
+            end
+        end
+    end)
+end
+
+local function stopRollSkip()
+    rollSkipping = false
+    RollBtn.BackgroundColor3 = Color3.fromRGB(0, 200, 0)
+    disableRollHooks()
+    
+    if rollSkipConnection then
+        rollSkipConnection:Disconnect()
+        rollSkipConnection = nil
+    end
+    
+    local BigRoller = PlayerGui:FindFirstChild("BigRoller")
+    if BigRoller then
+        BigRoller.Enabled = true
+    end
+    
+    local PackRoller = PlayerGui:FindFirstChild("PackRoller")
+    if PackRoller then
+        PackRoller.Enabled = true
+    end
+end
+
+-- ==================== AUTO HIT SYSTEM ====================
+
+local autoHitting = false
+local hitConnection = nil
+
+local function startAutoHit()
+    autoHitting = true
+    HitBtn.BackgroundColor3 = Color3.fromRGB(220, 0, 0)
+    
+    local Warp = require(ReplicatedStorage.Modules.Core.Warp)
+    local AttackWeapon = Warp.Client("AttackWeapon")
+    
+    hitConnection = task.spawn(function()
+        while autoHitting do
+            pcall(function()
+                AttackWeapon:Fire(true)
+            end)
+            task.wait(0.33)
+        end
+    end)
+end
+
+local function stopAutoHit()
+    autoHitting = false
+    HitBtn.BackgroundColor3 = Color3.fromRGB(0, 200, 0)
+    hitConnection = nil
+end
+
+-- ==================== LAG CLEAN SYSTEM (DESTROY MODE) ====================
+
+local cleaning = false
+local cleanThread = nil
+
+local function cleanLagCycle()
+    while cleaning do
+        local startTime = tick()
+        
+        -- 1. DESTROY ALL COINS/COINSBAGS (main lag source)
+        local Temp = workspace:FindFirstChild("Temp")
+        if Temp then
+            for _, child in pairs(Temp:GetChildren()) do
+                if child.Name == "Coin" or child.Name == "CoinBag" then
+                    pcall(function()
+                        child:Destroy()
+                    end)
+                end
+            end
+        end
+        
+        -- 2. DESTROY ENEMY HEALTHBARS
+        local Plots = workspace:FindFirstChild("Plots")
+        if Plots then
+            for _, plot in pairs(Plots:GetChildren()) do
+                local enemies = plot:FindFirstChild("Enemies")
+                if enemies then
+                    for _, enemy in pairs(enemies:GetChildren()) do
+                        -- DESTROY HostileHealthbar
+                        local healthbar = enemy:FindFirstChild("HostileHealthbar")
+                        if healthbar then
+                            pcall(function()
+                                healthbar:Destroy()
+                            end)
+                        end
+                        
+                        -- DESTROY all billboard guis on enemy
+                        for _, desc in pairs(enemy:GetDescendants()) do
+                            if desc:IsA("BillboardGui") then
+                                pcall(function()
+                                    desc:Destroy()
+                                end)
+                            end
+                        end
+                        
+                        -- DESTROY particles and trails
+                        for _, desc in pairs(enemy:GetDescendants()) do
+                            if desc:IsA("ParticleEmitter") then
+                                pcall(function()
+                                    desc:Destroy()
+                                end)
+                            end
+                            if desc:IsA("Trail") then
+                                pcall(function()
+                                    desc:Destroy()
+                                end)
+                            end
+                        end
+                        
+                        -- DESTROY highlight effects
+                        local highlight = enemy:FindFirstChild("HitFlashHighlight")
+                        if highlight then
+                            pcall(function()
+                                highlight:Destroy()
+                            end)
+                        end
+                    end
+                end
+            end
+        end
+        
+        -- 3. DESTROY DAMAGE BILLBOARD PARTS (floating numbers)
+        if Temp then
+            for _, child in pairs(Temp:GetChildren()) do
+                if child.Name:find("DamageBillboard") or child.Name:find("Billboard") then
+                    pcall(function()
+                        child:Destroy()
+                    end)
+                end
+            end
+        end
+        
+        -- Also check Essentials for the template
+        local Essentials = workspace:FindFirstChild("Essentials")
+        if Essentials then
+            local repStore = Essentials:FindFirstChild("ReplicatedStorage")
+            if repStore then
+                local damageBillboard = repStore:FindFirstChild("DamageBillboardPart")
+                if damageBillboard then
+                    pcall(function()
+                        damageBillboard:Destroy()
+                    end)
+                end
+            end
+        end
+        
+        -- 4. DESTROY VFX IN TEMP
+        if Temp then
+            for _, child in pairs(Temp:GetChildren()) do
+                if child:IsA("BasePart") or child:IsA("Model") then
+                    if child.Name:find("Vfx") or child.Name:find("Effect") or child.Name:find("Explosion") or child.Name:find("Death") or child.Name:find("Impact") then
+                        pcall(function()
+                            child:Destroy()
+                        end)
+                    end
+                end
+                -- DESTROY attachments with particles
+                for _, desc in pairs(child:GetDescendants()) do
+                    if desc:IsA("Attachment") then
+                        for _, emitter in pairs(desc:GetChildren()) do
+                            if emitter:IsA("ParticleEmitter") then
+                                pcall(function()
+                                    emitter:Destroy()
+                                end)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        
+        -- 5. DESTROY PROJECTILES / THROWN ITEMS
+        if Temp then
+            for _, child in pairs(Temp:GetChildren()) do
+                if child:IsA("BasePart") and (child.Name:find("Throw") or child.Name:find("Projectile") or child.Name:find("Boss") or child.Name:find("Item")) then
+                    pcall(function()
+                        child:Destroy()
+                    end)
+                end
+            end
+        end
+        
+        -- 6. DESTROY BLOCK VFX ATTACHMENTS (fire/poison/darkness on enemies)
+        if Plots then
+            for _, plot in pairs(Plots:GetChildren()) do
+                local enemies = plot:FindFirstChild("Enemies")
+                if enemies then
+                    for _, enemy in pairs(enemies:GetChildren()) do
+                        local hrp = enemy:FindFirstChild("HumanoidRootPart") or enemy.PrimaryPart
+                        if hrp then
+                            for _, child in pairs(hrp:GetChildren()) do
+                                if child:IsA("Attachment") and (child.Name:find("Vfx") or child.Name:find("Burn")) then
+                                    pcall(function()
+                                        child:Destroy()
+                                    end)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        
+        -- 7. DESTROY SOUND INSTANCES (not mute - DESTROY)
+        local SoundService = game:GetService("SoundService")
+        local Sfx = SoundService:FindFirstChild("Sfx")
+        if Sfx then
+            for _, sound in pairs(Sfx:GetDescendants()) do
+                if sound:IsA("Sound") then
+                    if sound.Name:find("Coin") or sound.Name:find("EnemyHit") or sound.Name:find("EnemyDied") or sound.Name:find("ZombieExplosion") or sound.Name:find("MoneyZombie") or sound.Name:find("Weapon") then
+                        pcall(function()
+                            sound:Destroy()
+                        end)
+                    end
+                end
+            end
+        end
+        
+        local UiSounds = SoundService:FindFirstChild("Ui")
+        if UiSounds then
+            for _, sound in pairs(UiSounds:GetDescendants()) do
+                if sound:IsA("Sound") and (sound.Name:find("Roll") or sound.Name:find("Tick") or sound.Name:find("Reveal")) then
+                    pcall(function()
+                        sound:Destroy()
+                    end)
+                end
+            end
+        end
+        
+        -- 8. DESTROY COIN GAIN UI (the floating +money text)
+        local Hud = PlayerGui:FindFirstChild("HUD")
+        if Hud then
+            for _, desc in pairs(Hud:GetDescendants()) do
+                if desc:IsA("TextLabel") and desc.Name:find("Coin") and desc.Name ~= "CoinQuantity" then
+                    pcall(function()
+                        desc:Destroy()
+                    end)
+                end
+            end
+        end
+        
+        -- Wait 0.25s before next cycle
+        local elapsed = tick() - startTime
+        local waitTime = math.max(0, 0.25 - elapsed)
+        task.wait(waitTime)
+    end
+end
+
+local function startClean()
+    cleaning = true
+    CleanBtn.BackgroundColor3 = Color3.fromRGB(0, 200, 220)
+    
+    cleanThread = task.spawn(cleanLagCycle)
+end
+
+local function stopClean()
+    cleaning = false
+    CleanBtn.BackgroundColor3 = Color3.fromRGB(30, 60, 150)
+    -- Nothing to restore since we destroyed everything
+end
+
+-- ==================== BUTTON CONNECTIONS ====================
+
+RollBtn.MouseButton1Click:Connect(function()
+    if rollSkipping then
+        stopRollSkip()
+    else
+        startRollSkip()
+    end
+end)
+
+HitBtn.MouseButton1Click:Connect(function()
+    if autoHitting then
+        stopAutoHit()
+    else
+        startAutoHit()
+    end
+end)
+
+CleanBtn.MouseButton1Click:Connect(function()
+    if cleaning then
+        stopClean()
+    else
+        startClean()
+    end
+end)
+
+CloseBtn.MouseButton1Click:Connect(function()
+    stopRollSkip()
+    stopAutoHit()
+    stopClean()
+    ScreenGui:Destroy()
+end)
+
+-- ==================== DRAGGABLE ====================
+
+local dragging = false
+local dragStart = nil
+local startPos = nil
+
+Frame.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPos = Frame.Position
+    end
+end)
+
+Frame.InputChanged:Connect(function(input)
+    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        local delta = input.Position - dragStart
+        Frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+
+Frame.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+    end
+end)
+
+print("MiniWars Utils v7 | Roll:OFF Hit:OFF Clean:OFF")
