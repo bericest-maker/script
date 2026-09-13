@@ -1,16 +1,8 @@
---====================================================--
---   AUTO MYTHIC SHOPPER + BOSS HUNTER + CLEANER      --
---   Lightweight | Basic UI | No Spam Messages        --
---====================================================--
-
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
---====================================================--
---                    CONFIG                          --
---====================================================--
 local CONFIG = {
     REFRESH_RATE = 1,
     CLEAN_INTERVAL = 2,
@@ -19,9 +11,6 @@ local CONFIG = {
     BUY_DELAY = 0.08,
 }
 
---====================================================--
---               CLEANUP (STARTUP)                    --
---====================================================--
 local function cleanupWorkspace()
     pcall(function()
         for _, unit in ipairs(Workspace.ActiveUnits:GetChildren()) do
@@ -60,9 +49,8 @@ local function cleanupWorkspace()
         end
     end)
 
-    -- Delete Area in Front (if exists)
     pcall(function()
-        local areaFront = Workspace:FindFirstChild("AreaInFront") or Workspace:FindFirstChild("Area_Front") or Workspace:FindFirstChild("FrontArea")
+        local areaFront = Workspace:FindFirstChild("AreaInFront") or Workspace:FindFirstChild("Area_Front") or Workspace:FindFirstChild("FrontArea") or Workspace:FindFirstChild("areaInFront")
         if areaFront then
             for _, child in ipairs(areaFront:GetChildren()) do
                 child:Destroy()
@@ -71,9 +59,6 @@ local function cleanupWorkspace()
     end)
 end
 
---====================================================--
---                 CONSOLE SYSTEM                     --
---====================================================--
 local consoleLines = {"", "", ""}
 local consoleLabels = {}
 
@@ -91,9 +76,6 @@ local function logConsole(msg)
     updateConsole()
 end
 
---====================================================--
---                     UI (SUPER BASIC)               --
---====================================================--
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "AutoMythicBossUI"
 screenGui.ResetOnSpawn = false
@@ -113,7 +95,6 @@ local corner = Instance.new("UICorner")
 corner.CornerRadius = UDim.new(0, 6)
 corner.Parent = mainFrame
 
--- Title
 local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, 0, 0, 30)
 title.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
@@ -128,7 +109,6 @@ local titleCorner = Instance.new("UICorner")
 titleCorner.CornerRadius = UDim.new(0, 6)
 titleCorner.Parent = title
 
--- Console
 local consoleFrame = Instance.new("Frame")
 consoleFrame.Size = UDim2.new(1, -12, 0, 70)
 consoleFrame.Position = UDim2.new(0, 6, 0, 36)
@@ -155,7 +135,6 @@ for i = 1, 3 do
     consoleLabels[i] = line
 end
 
--- Toggles
 local states = {
     mythicShop = false,
     bossHunt = false,
@@ -205,7 +184,6 @@ createToggle("Mythic Shop", "mythicShop")
 createToggle("Boss Hunt", "bossHunt")
 createToggle("Auto Clean", "autoClean")
 
--- Stats
 local statsFrame = Instance.new("Frame")
 statsFrame.Size = UDim2.new(1, -12, 0, 55)
 statsFrame.Position = UDim2.new(0, 6, 0, 222)
@@ -241,7 +219,6 @@ local function updateStats()
     statsLabels[3].Text = "Cleaned: " .. stats.Cleaned
 end
 
--- Close Button
 local closeBtn = Instance.new("TextButton")
 closeBtn.Size = UDim2.new(0, 24, 0, 24)
 closeBtn.Position = UDim2.new(1, -28, 0, 3)
@@ -261,9 +238,6 @@ closeBtn.MouseButton1Click:Connect(function()
     screenGui:Destroy()
 end)
 
---====================================================--
---              HELPER FUNCTIONS                      --
---====================================================--
 local function getRoot()
     local char = LocalPlayer.Character
     if char then
@@ -316,9 +290,6 @@ local function firePrompt(prompt)
     end)
 end
 
---====================================================--
---              MYTHIC SHOP SCANNER                   --
---====================================================--
 local shopCategories = {"units", "decoration", "production", "special"}
 local buying = false
 
@@ -338,31 +309,39 @@ local function scanShop()
                 local rarity = item:FindFirstChild("rarity")
                 if rarity and (rarity:IsA("TextLabel") or rarity:IsA("TextButton")) then
                     if rarity.Text:upper():find("MYTHIC") then
-                        local currencyPurchase = item:FindFirstChild("currencyPurchase")
-                        if currencyPurchase then
-                            local buyBtn = currencyPurchase:FindFirstChild("button")
-                            if buyBtn then
-                                buying = true
-                                logConsole('Found mythic "' .. item.Name .. '"')
-                                task.wait(0.1)
+                        local stockFrame = item:FindFirstChild("stockFrame")
+                        local stockAmount = stockFrame and stockFrame:FindFirstChild("stockAmount")
+                        local stock = stockAmount and tonumber(stockAmount.Text) or 0
 
-                                local buyCount = 0
-                                while buyBtn and buyBtn.Parent do
-                                    pcall(function()
-                                        buyBtn:Click()
-                                    end)
-                                    buyCount = buyCount + 1
-                                    stats.Mythics = stats.Mythics + 1
-                                    logConsole('Bought ' .. buyCount .. ' "' .. item.Name .. '"')
-                                    updateStats()
-                                    task.wait(CONFIG.BUY_DELAY)
+                        if stock > 0 then
+                            local currencyPurchase = item:FindFirstChild("currencyPurchase")
+                            if currencyPurchase then
+                                local buyBtn = currencyPurchase:FindFirstChild("button")
+                                if buyBtn then
+                                    buying = true
+                                    logConsole('Found mythic "' .. item.Name .. '"')
+                                    task.wait(0.1)
 
-                                    local newRarity = item:FindFirstChild("rarity")
-                                    if not newRarity or not newRarity.Text:upper():find("MYTHIC") then
-                                        break
+                                    local buyCount = 0
+                                    while buyBtn and buyBtn.Parent and buyCount < stock do
+                                        pcall(function()
+                                            buyBtn:Click()
+                                        end)
+                                        buyCount = buyCount + 1
+                                        stats.Mythics = stats.Mythics + 1
+                                        logConsole('Bought ' .. buyCount .. ' "' .. item.Name .. '"')
+                                        updateStats()
+                                        task.wait(CONFIG.BUY_DELAY)
+
+                                        local newStockFrame = item:FindFirstChild("stockFrame")
+                                        local newStockAmount = newStockFrame and newStockFrame:FindFirstChild("stockAmount")
+                                        local newStock = newStockAmount and tonumber(newStockAmount.Text) or 0
+                                        if newStock <= 0 then
+                                            break
+                                        end
                                     end
+                                    buying = false
                                 end
-                                buying = false
                             end
                         end
                     end
@@ -372,21 +351,16 @@ local function scanShop()
     end
 end
 
---====================================================--
---               BOSS HUNTER (CLOSEST POINT)          --
---====================================================--
 local capturePoints = {
     {name = "Center", air = nil, ground = nil, naval = nil},
     {name = "1", air = nil, ground = nil, naval = nil},
     {name = "5", air = nil, ground = nil, naval = nil},
 }
 
--- Initialize capture points
 local function initCapturePoints()
     pcall(function()
         local cp = Workspace.Components.ControlPoints
         if cp then
-            -- Center
             if cp:FindFirstChild("Center") then
                 local center = cp.Center
                 if center:FindFirstChild("interact") then
@@ -394,7 +368,6 @@ local function initCapturePoints()
                     capturePoints[1].ground = center.interact:FindFirstChild("GroundCaptureTarget")
                 end
             end
-            -- Point 1
             if cp:FindFirstChild("1") then
                 local p1 = cp["1"]
                 if p1:FindFirstChild("interact") then
@@ -402,7 +375,6 @@ local function initCapturePoints()
                     capturePoints[2].ground = p1.interact:FindFirstChild("GroundCaptureTarget")
                 end
             end
-            -- Point 5 (uses 8's naval)
             if cp:FindFirstChild("8") then
                 local p8 = cp["8"]
                 if p8:FindFirstChild("interact") then
@@ -450,7 +422,6 @@ local function huntBoss()
 
             local bossRoot = unit:FindFirstChild("root") or unit:FindFirstChild("HumanoidRootPart") or unit:FindFirstChild("Torso")
             if not bossRoot then
-                -- Try to find any part with position
                 for _, child in ipairs(unit:GetDescendants()) do
                     if child:IsA("BasePart") then
                         bossRoot = child
@@ -467,7 +438,6 @@ local function huntBoss()
 
                     local root = getRoot()
                     if root then
-                        -- Move to ground/naval first, then air
                         local primaryTarget = closestPoint.ground or closestPoint.naval or closestPoint.air
                         if primaryTarget then
                             moveTo(primaryTarget.Position, 20)
@@ -479,7 +449,6 @@ local function huntBoss()
                             end
                         end
 
-                        -- Then air target
                         if closestPoint.air and closestPoint.air ~= primaryTarget then
                             moveTo(closestPoint.air.Position, 20)
                             for _, desc in ipairs(closestPoint.air:GetDescendants()) do
@@ -499,9 +468,6 @@ local function huntBoss()
     end
 end
 
---====================================================--
---               AUTO CLEANER                         --
---====================================================--
 local function cleanActiveUnits()
     local activeUnits = Workspace:FindFirstChild("ActiveUnits")
     if not activeUnits then return end
@@ -520,9 +486,6 @@ local function cleanActiveUnits()
     updateStats()
 end
 
---====================================================--
---               MAIN LOOPS                           --
---====================================================--
 initCapturePoints()
 cleanupWorkspace()
 logConsole("Ready")
