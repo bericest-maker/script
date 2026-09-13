@@ -331,29 +331,37 @@ local function scanShop()
                             local currencyPurchase = item:FindFirstChild("currencyPurchase")
                             if currencyPurchase then
                                 local buyBtn = currencyPurchase:FindFirstChild("button")
-                                if buyBtn then
-                                    buying = true
-                                    logConsole('Found mythic "' .. item.Name .. '"')
-                                    task.wait(0.1)
+if buyBtn then
+    buying = true
+    logConsole('Found mythic "' .. item.Name .. '"')
+    task.wait(0.1)
 
-                                    local buyCount = 0
-                                    while buyBtn and buyBtn.Parent and buyCount < stock do
-                                        pcall(function()
-                                            buyBtn:Click()
-                                        end)
-                                        buyCount = buyCount + 1
-                                        stats.Mythics = stats.Mythics + 1
-                                        logConsole('Bought ' .. buyCount .. ' "' .. item.Name .. '"')
-                                        updateStats()
-                                        task.wait(CONFIG.BUY_DELAY)
+    local buyCount = 0
+    local PurchaseStructure = game:GetService("ReplicatedStorage")
+        .Shared.Resources.VendorResources.Remotes.PurchaseStructure
 
-                                        local newStockFrame = item:FindFirstChild("stockFrame")
-                                        local newStockAmount = newStockFrame and newStockFrame:FindFirstChild("stockAmount")
-                                        local newStock = newStockAmount and tonumber(newStockAmount.Text) or 0
-                                        if newStock <= 0 then
-                                            break
-                                        end
-                                    end
+    while buyBtn and buyBtn.Parent and buyCount < stock do
+        pcall(function()
+            PurchaseStructure:FireServer(item.Name)
+        end)
+
+        buyCount = buyCount + 1
+        stats.Mythics = stats.Mythics + 1
+        logConsole('Bought ' .. buyCount .. ' "' .. item.Name .. '"')
+        updateStats()
+        task.wait(CONFIG.BUY_DELAY)
+
+        local newStockFrame = item:FindFirstChild("stockFrame")
+        local newStockAmount = newStockFrame and newStockFrame:FindFirstChild("stockAmount")
+        local newStock = newStockAmount and tonumber(newStockAmount.Text) or 0
+
+        if newStock <= 0 then
+            break
+        end
+    end
+
+    buying = false
+end
                                     buying = false
                                 end
                             end
