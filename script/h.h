@@ -50,7 +50,7 @@ local function cleanupWorkspace()
     end)
 
     pcall(function()
-        local areaFront = Workspace:FindFirstChild("AreaInFront") or Workspace:FindFirstChild("Area_Front") or Workspace:FindFirstChild("FrontArea") or Workspace:FindFirstChild("areaInFront")
+        local areaFront = Workspace.Center:FindFirstChild("AreaInFront")
         if areaFront then
             for _, child in ipairs(areaFront:GetChildren()) do
                 child:Destroy()
@@ -529,4 +529,34 @@ task.spawn(function()
         end
         task.wait(CONFIG.CLEAN_INTERVAL)
     end
+end)
+
+local s = {3, 5, 10, 60}
+local i = 1
+local g = gethui()
+for _, v in pairs(g:GetChildren()) do
+    if v.Name == "FPSGui" then
+        v:Destroy()
+    end
+end
+local sg = Instance.new("ScreenGui", g)
+sg.Name = "FPSGui"
+sg.ResetOnSpawn = false
+local b = Instance.new("TextButton", sg)
+b.Size = UDim2.new(0, 120, 0, 40)
+b.Position = UDim2.new(1, -130, 0, 10)
+b.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+b.BackgroundTransparency = .15
+b.Text = "FPS: OFF"
+b.TextColor3 = Color3.new(1, 1, 1)
+b.TextSize = 16
+b.Font = Enum.Font.GothamBold
+Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+b.MouseButton1Click:Connect(function()
+    i = i % 4 + 1
+    local f = s[i]
+    if setfpscap then
+        setfpscap(f)
+    end
+    b.Text = f ~= 60 and "FPS: " .. f or "FPS: OFF"
 end)
