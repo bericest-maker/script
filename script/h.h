@@ -57,6 +57,20 @@ local function cleanupWorkspace()
             end
         end
     end)
+
+    pcall(function()
+        for _, plot in ipairs(Workspace.Plots:GetChildren()) do
+            local baseplate = plot:FindFirstChild("baseplate")
+            if baseplate then
+                local plotDecoration = baseplate:FindFirstChild("plotDecoration")
+                if plotDecoration then
+                    for _, child in ipairs(plotDecoration:GetChildren()) do
+                        child:Destroy()
+                    end
+                end
+            end
+        end
+    end)
 end
 
 local consoleLines = {"", "", ""}
