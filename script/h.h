@@ -121,10 +121,10 @@ end
 local states = {m = false, b = false, c = false}
 local stats = {Mythics = 0, Bosses = 0, Cleaned = 0}
 
-local function createToggle(text, key, y)
+local function createToggle(text, key, x)
     local btn = Instance.new("TextButton")
     btn.Size = UDim2.new(0.3, -2, 0, 20)
-    btn.Position = UDim2.new(key == "m" and 0 or key == "b" and 0.35 or 0.7, 0, 0, y)
+    btn.Position = UDim2.new(x, 0, 0, 80)
     btn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
     btn.BorderSizePixel = 0
     btn.Text = text
@@ -139,9 +139,9 @@ local function createToggle(text, key, y)
     end)
 end
 
-createToggle("M", "m", 80)
-createToggle("B", "b", 80)
-createToggle("C", "c", 80)
+createToggle("M", "m", 0)
+createToggle("B", "b", 0.35)
+createToggle("C", "c", 0.7)
 
 local statsLabel = Instance.new("TextLabel")
 statsLabel.Size = UDim2.new(1, -8, 0, 14)
@@ -319,8 +319,11 @@ local function huntBoss()
     local activeUnits = Workspace:FindFirstChild("ActiveUnits")
     if not activeUnits then return end
 
+    local bossFound = false
+    
     for _, unit in ipairs(activeUnits:GetChildren()) do
         if unit.Name:match("^BOSS:") then
+            bossFound = true
             huntingBoss = true
             local bossName = unit.Name
             local bossRoot = unit:FindFirstChild("root") or unit:FindFirstChild("HumanoidRootPart") or unit:FindFirstChild("Torso")
@@ -370,6 +373,25 @@ local function huntBoss()
             end
             huntingBoss = false
             break
+        end
+    end
+    
+    if not bossFound and lastBossPos then
+        lastBossPos = nil
+        logConsole("Boss ended, returning to Center")
+        
+        local root = getRoot()
+        if root and capturePoints[1].ground then
+            local oldCFrame = root.CFrame
+            root.CFrame = capturePoints[1].ground.CFrame
+            task.wait(CONFIG.TP_SPEED)
+            firePrompt(capturePoints[1].ground)
+            if capturePoints[1].air then
+                root.CFrame = capturePoints[1].air.CFrame
+                task.wait(CONFIG.TP_SPEED)
+                firePrompt(capturePoints[1].air)
+            end
+            root.CFrame = oldCFrame
         end
     end
 end
