@@ -1,462 +1,224 @@
-local Players = game:GetService("Players")
-local LocalPlayer = Players.LocalPlayer
-local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
-local Workspace = game:GetService("Workspace")
-local RS = game:GetService("ReplicatedStorage")
+local Players=game:GetService("Players")
+local LocalPlayer=Players.LocalPlayer
+local PlayerGui=LocalPlayer:WaitForChild("PlayerGui")
+local Workspace=game:GetService("Workspace")
+local RS=game:GetService("ReplicatedStorage")
 
-local CONFIG = {
-    REFRESH_RATE = 1,
-    CLEAN_INTERVAL = 2,
-    MAX_HEALTH_DELETE = 300000,
-    AUTO_JUMP = true,
-    TP_SPEED = 0.3,
-}
+local CONFIG={REFRESH_RATE=1,CLEAN_INTERVAL=2,MAX_HEALTH_DELETE=300000,TP_SPEED=0.3}
+local GRAY=Color3.fromRGB(212,208,200) local DARK=Color3.fromRGB(80,80,80)
 
-local PurchaseRemote = RS:WaitForChild("Shared"):WaitForChild("Resources"):WaitForChild("VendorResources"):WaitForChild("Remotes"):WaitForChild("PurchaseStructure")
+local PurchaseRemote=RS:WaitForChild("Shared"):WaitForChild("Resources"):WaitForChild("VendorResources"):WaitForChild("Remotes"):WaitForChild("PurchaseStructure")
 
 local function cleanupWorkspace()
-    pcall(function()
-        for _, unit in ipairs(Workspace.ActiveUnits:GetChildren()) do
-            if not unit.Name:match("^BOSS:") then
-                local maxHealth = unit:GetAttribute("MaxHealth")
-                if maxHealth and maxHealth < CONFIG.MAX_HEALTH_DELETE then
-                    unit:Destroy()
-                end
-            end
-        end
-    end)
-    pcall(function()
-        for _, island in ipairs(Workspace.Center.Islands:GetChildren()) do
-            if island.Name:match("Oil Rig") then island:Destroy() end
-        end
-    end)
-    pcall(function()
-        for _, prop in ipairs(Workspace.Center.Islands.SideIslandProps:GetChildren()) do
-            prop:Destroy()
-        end
-    end)
-    pcall(function()
-        for _, prop in ipairs(Workspace.Center.Props:GetChildren()) do
-            prop:Destroy()
-        end
-    end)
-    pcall(function()
-        for _, weather in ipairs(Workspace.Components.Weather:GetChildren()) do
-            weather:Destroy()
-        end
-    end)
-    pcall(function()
-        local areaFront = Workspace.Center:FindFirstChild("AreaInFront")
-        if areaFront then
-            for _, child in ipairs(areaFront:GetChildren()) do child:Destroy() end
-        end
-    end)
-    pcall(function()
-        for _, plot in ipairs(Workspace.Plots:GetChildren()) do
-            local baseplate = plot:FindFirstChild("baseplate")
-            if baseplate then
-                local plotDecoration = baseplate:FindFirstChild("plotDecoration")
-                if plotDecoration then
-                    for _, child in ipairs(plotDecoration:GetChildren()) do child:Destroy() end
-                end
-            end
-        end
-    end)
+	pcall(function() local t=Workspace:FindFirstChild("Terrain") if t then t:Destroy() end end)
+	pcall(function() for _,c in ipairs(Workspace.Center:GetChildren()) do if c.Name~="OceanCollision" then c:Destroy() end end end)
+	pcall(function() for _,p in ipairs(Workspace.Plots:GetChildren()) do p:Destroy() end end)
+	pcall(function() for _,w in ipairs(Workspace.Components.Weather:GetChildren()) do w:Destroy() end end)
 end
 
-local consoleLines = {"", "", ""}
-local consoleLabels = {}
+local lines={"","",""} local labels={}
+local function log(m) table.remove(lines,1) table.insert(lines,m) for i=1,3 do if labels[i] then labels[i].Text=lines[i] end end end
 
-local function updateConsole()
-    for i = 1, 3 do
-        if consoleLabels[i] then consoleLabels[i].Text = consoleLines[i] end
-    end
+local sg=Instance.new("ScreenGui") sg.Name="A" sg.ResetOnSpawn=false sg.Parent=PlayerGui
+
+local W,H=150,92
+local f=Instance.new("Frame")
+f.Size=UDim2.new(0,W,0,H) f.Position=UDim2.new(0,10,0.5,-H/2)
+f.BackgroundColor3=GRAY f.BorderSizePixel=0 f.Active=true f.Draggable=true f.Parent=sg
+
+local tb=Instance.new("Frame") tb.Size=UDim2.new(1,0,0,16) tb.BackgroundColor3=GRAY tb.BorderSizePixel=0 tb.Parent=f
+local tl=Instance.new("TextLabel") tl.Size=UDim2.new(1,-40,1,0) tl.Position=UDim2.new(0,20,0,0) tl.BackgroundTransparency=1 tl.Text="Name" tl.TextColor3=Color3.new(0,0,0) tl.TextSize=10 tl.Font=Enum.Font.Code tl.Parent=tb
+
+local function mkBtn(txt,x)
+	local b=Instance.new("TextButton")
+	b.Size=UDim2.new(0,15,0,12) b.Position=UDim2.new(1,x,0,2)
+	b.BackgroundColor3=GRAY b.BorderSizePixel=1 b.BorderColor3=DARK
+	b.Text=txt b.TextColor3=Color3.new(0,0,0) b.TextSize=10 b.Font=Enum.Font.Code b.Parent=tb
+	return b
 end
 
-local function logConsole(msg)
-    table.remove(consoleLines, 1)
-    table.insert(consoleLines, msg)
-    updateConsole()
+local minB=mkBtn("_",-32) local xB=mkBtn("X",-16)
+
+local body=Instance.new("Frame") body.Size=UDim2.new(1,0,1,-16) body.Position=UDim2.new(0,0,0,16) body.BackgroundTransparency=1 body.BorderSizePixel=0 body.Parent=f
+
+local cb=Instance.new("Frame") cb.Size=UDim2.new(1,-6,0,36) cb.Position=UDim2.new(0,3,0,3) cb.BackgroundColor3=Color3.fromRGB(235,235,235) cb.BorderSizePixel=1 cb.BorderColor3=DARK cb.Parent=body
+for i=1,3 do
+	local l=Instance.new("TextLabel")
+	l.Size=UDim2.new(1,-4,0,11) l.Position=UDim2.new(0,2,0,1+(i-1)*11)
+	l.BackgroundTransparency=1 l.Text="" l.TextColor3=Color3.new(0,0,0) l.TextSize=10 l.Font=Enum.Font.Code
+	l.TextXAlignment=Enum.TextXAlignment.Left l.TextTruncate=Enum.TextTruncate.AtEnd l.Parent=cb
+	labels[i]=l
 end
 
-local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "A"
-screenGui.ResetOnSpawn = false
-screenGui.Parent = PlayerGui
+local states={m=false,b=false,c=false}
+local stats={M=0,B=0,C=0}
 
-local mainFrame = Instance.new("Frame")
-mainFrame.Size = UDim2.new(0, 200, 0, 120)
-mainFrame.Position = UDim2.new(0, 10, 0.5, -60)
-mainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-mainFrame.BorderSizePixel = 0
-mainFrame.Active = true
-mainFrame.Draggable = true
-mainFrame.Parent = screenGui
+local sLabel=Instance.new("TextLabel")
+sLabel.Size=UDim2.new(1,-6,0,11) sLabel.Position=UDim2.new(0,3,0,75)
+sLabel.BackgroundTransparency=1 sLabel.Text="M:0 B:0 C:0" sLabel.TextColor3=DARK sLabel.TextSize=10 sLabel.Font=Enum.Font.Code
+sLabel.TextXAlignment=Enum.TextXAlignment.Left sLabel.Parent=body
 
-local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, 0, 0, 20)
-title.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-title.BorderSizePixel = 0
-title.Text = "A"
-title.TextColor3 = Color3.fromRGB(0, 255, 0)
-title.TextSize = 12
-title.Font = Enum.Font.Code
-title.Parent = mainFrame
+local function updStats() sLabel.Text=string.format("M:%d B:%d C:%d",stats.M,stats.B,stats.C) end
 
-for i = 1, 3 do
-    local line = Instance.new("TextLabel")
-    line.Size = UDim2.new(1, -8, 0, 16)
-    line.Position = UDim2.new(0, 4, 0, 22 + (i-1) * 18)
-    line.BackgroundTransparency = 1
-    line.Text = ""
-    line.TextColor3 = Color3.fromRGB(200, 200, 200)
-    line.TextSize = 11
-    line.Font = Enum.Font.Code
-    line.TextXAlignment = Enum.TextXAlignment.Left
-    line.TextTruncate = Enum.TextTruncate.AtEnd
-    line.Parent = mainFrame
-    consoleLabels[i] = line
+for i,k in ipairs({"m","b","c"}) do
+	local b=Instance.new("TextButton")
+	b.Size=UDim2.new(0.333,-3,0,14) b.Position=UDim2.new((i-1)*0.333,2,0,42)
+	b.BackgroundColor3=GRAY b.BorderSizePixel=1 b.BorderColor3=DARK
+	b.Text=k:upper() b.TextColor3=Color3.new(0,0,0) b.TextSize=10 b.Font=Enum.Font.Code b.Parent=body
+	b.MouseButton1Click:Connect(function()
+		states[k]=not states[k]
+		b.BackgroundColor3=states[k] and Color3.new(1,1,1) or GRAY
+		b.BorderColor3=states[k] and Color3.new(0,0,0) or DARK
+	end)
 end
 
-local states = {m = false, b = false, c = false}
-local stats = {Mythics = 0, Bosses = 0, Cleaned = 0}
+local minimized=false
+minB.MouseButton1Click:Connect(function()
+	minimized=not minimized body.Visible=not minimized
+	f.Size=minimized and UDim2.new(0,W,0,16) or UDim2.new(0,W,0,H)
+end)
+xB.MouseButton1Click:Connect(function() sg:Destroy() end)
 
-local function createToggle(text, key, x)
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(0.3, -2, 0, 20)
-    btn.Position = UDim2.new(x, 0, 0, 80)
-    btn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-    btn.BorderSizePixel = 0
-    btn.Text = text
-    btn.TextColor3 = Color3.fromRGB(150, 150, 150)
-    btn.TextSize = 10
-    btn.Font = Enum.Font.Code
-    btn.Parent = mainFrame
-    btn.MouseButton1Click:Connect(function()
-        states[key] = not states[key]
-        btn.BackgroundColor3 = states[key] and Color3.fromRGB(0, 100, 50) or Color3.fromRGB(40, 40, 40)
-        btn.TextColor3 = states[key] and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(150, 150, 150)
-    end)
+local function getRoot() local c=LocalPlayer.Character return c and c:FindFirstChild("HumanoidRootPart") end
+
+local function firePrompt(p)
+	pcall(function() if p and p.Parent then p:InputHoldBegin() task.wait(0.1) p:InputHoldEnd() end end)
 end
 
-createToggle("M", "m", 0)
-createToggle("B", "b", 0.35)
-createToggle("C", "c", 0.7)
-
-local statsLabel = Instance.new("TextLabel")
-statsLabel.Size = UDim2.new(1, -8, 0, 14)
-statsLabel.Position = UDim2.new(0, 4, 0, 104)
-statsLabel.BackgroundTransparency = 1
-statsLabel.Text = "M:0 B:0 C:0"
-statsLabel.TextColor3 = Color3.fromRGB(100, 200, 255)
-statsLabel.TextSize = 10
-statsLabel.Font = Enum.Font.Code
-statsLabel.TextXAlignment = Enum.TextXAlignment.Left
-statsLabel.Parent = mainFrame
-
-local function updateStats()
-    statsLabel.Text = string.format("M:%d B:%d C:%d", stats.Mythics, stats.Bosses, stats.Cleaned)
-end
-
-local closeBtn = Instance.new("TextButton")
-closeBtn.Size = UDim2.new(0, 16, 0, 16)
-closeBtn.Position = UDim2.new(1, -18, 0, 2)
-closeBtn.BackgroundColor3 = Color3.fromRGB(150, 30, 30)
-closeBtn.BorderSizePixel = 0
-closeBtn.Text = "X"
-closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-closeBtn.TextSize = 10
-closeBtn.Font = Enum.Font.Code
-closeBtn.Parent = mainFrame
-closeBtn.MouseButton1Click:Connect(function() screenGui:Destroy() end)
-
-local function getRoot()
-    local char = LocalPlayer.Character
-    return char and char:FindFirstChild("HumanoidRootPart")
-end
-
-local function autoJump()
-    if not CONFIG.AUTO_JUMP then return end
-    local char = LocalPlayer.Character
-    if char then
-        local humanoid = char:FindFirstChild("Humanoid")
-        if humanoid and humanoid.FloorMaterial ~= Enum.Material.Air then
-            humanoid.Jump = true
-        end
-    end
-end
-
-local function moveTo(targetPos, timeout)
-    local root = getRoot()
-    if not root then return false end
-    timeout = timeout or 10
-    local startTime = tick()
-    while tick() - startTime < timeout do
-        root = getRoot()
-        if not root then return false end
-        if (root.Position - targetPos).Magnitude < 5 then return true end
-        root.CFrame = CFrame.new(root.Position, Vector3.new(targetPos.X, root.Position.Y, targetPos.Z))
-        root.Velocity = Vector3.new(0, root.Velocity.Y, 0)
-        local direction = (targetPos - root.Position).Unit
-        root.Velocity = Vector3.new(direction.X * 50, root.Velocity.Y, direction.Z * 50)
-        autoJump()
-        task.wait(0.05)
-    end
-    return false
-end
-
-local function firePrompt(prompt)
-    pcall(function()
-        if prompt and prompt.Parent then
-            prompt:InputHoldBegin()
-            task.wait(0.1)
-            prompt:InputHoldEnd()
-        end
-    end)
-end
-
-local shopCategories = {"units", "decoration", "production", "special"}
-local buying = false
-
+local buying=false
 local function scanShop()
-    if buying then return end
-    local shopFrame = PlayerGui:FindFirstChild("shopVendor")
-    if not shopFrame then return end
-    local main = shopFrame:FindFirstChild("main")
-    if not main then return end
-    local shopFrame2 = main:FindFirstChild("shopFrame")
-    if not shopFrame2 then return end
-
-    for _, cat in ipairs(shopCategories) do
-        local categoryFrame = shopFrame2:FindFirstChild(cat)
-        if categoryFrame then
-            for _, item in ipairs(categoryFrame:GetChildren()) do
-                local rarity = item:FindFirstChild("rarity")
-                if rarity and (rarity:IsA("TextLabel") or rarity:IsA("TextButton")) then
-                    if rarity.Text:upper():find("MYTHIC") then
-                        local stockFrame = item:FindFirstChild("stockFrame")
-                        local stockAmount = stockFrame and stockFrame:FindFirstChild("stockAmount")
-                        local stock = stockAmount and tonumber(stockAmount.Text) or 0
-                        if stock > 0 then
-                            buying = true
-                            logConsole('Found mythic "' .. item.Name .. '"')
-                            task.wait(0.1)
-                            local buyCount = 0
-                            while buyCount < stock do
-                                PurchaseRemote:FireServer(item.Name)
-                                buyCount = buyCount + 1
-                                stats.Mythics = stats.Mythics + 1
-                                logConsole('Bought ' .. buyCount .. ' "' .. item.Name .. '"')
-                                updateStats()
-                                task.wait(0.08)
-                                local newStock = stockAmount and tonumber(stockAmount.Text) or 0
-                                if newStock <= 0 then break end
-                            end
-                            buying = false
-                        end
-                    end
-                end
-            end
-        end
-    end
+	if buying then return end
+	local sf=PlayerGui:FindFirstChild("shopVendor") if not sf then return end
+	local m=sf:FindFirstChild("main") if not m then return end
+	local sf2=m:FindFirstChild("shopFrame") if not sf2 then return end
+	for _,cat in ipairs({"units","decoration","production","special"}) do
+		local cf=sf2:FindFirstChild(cat)
+		if cf then
+			for _,item in ipairs(cf:GetChildren()) do
+				local r=item:FindFirstChild("rarity")
+				if r and r.Text:upper():find("MYTHIC") then
+					local sa=item:FindFirstChild("stockFrame") and item.stockFrame:FindFirstChild("stockAmount")
+					local stock=sa and tonumber(sa.Text) or 0
+					if stock>0 then
+						buying=true
+						log('Found mythic "'..item.Name..'"')
+						task.wait(0.1)
+						local bc=0
+						while bc<stock do
+							PurchaseRemote:FireServer(item.Name)
+							bc=bc+1 stats.M=stats.M+1
+							log('Bought '..bc..' "'..item.Name..'"') updStats()
+							task.wait(0.08)
+							if (sa and tonumber(sa.Text) or 0)<=0 then break end
+						end
+						buying=false
+					end
+				end
+			end
+		end
+	end
 end
 
-local capturePoints = {
-    {name = "Center", air = nil, ground = nil, naval = nil},
-    {name = "1", air = nil, ground = nil, naval = nil},
-    {name = "5", air = nil, ground = nil, naval = nil},
+local capturePoints={
+	{name="Center",air=nil,ground=nil,naval=nil},
+	{name="1",air=nil,ground=nil,naval=nil},
+	{name="5",air=nil,ground=nil,naval=nil},
 }
 
-local function initCapturePoints()
-    pcall(function()
-        local cp = Workspace.Components.ControlPoints
-        if cp then
-            if cp:FindFirstChild("Center") then
-                local c = cp.Center
-                if c:FindFirstChild("interact") then
-                    capturePoints[1].air = c.interact:FindFirstChild("AirCaptureTarget")
-                    capturePoints[1].ground = c.interact:FindFirstChild("GroundCaptureTarget")
-                end
-            end
-            if cp:FindFirstChild("1") then
-                local p = cp["1"]
-                if p:FindFirstChild("interact") then
-                    capturePoints[2].air = p.interact:FindFirstChild("AirCaptureTarget")
-                    capturePoints[2].ground = p.interact:FindFirstChild("GroundCaptureTarget")
-                end
-            end
-            if cp:FindFirstChild("8") then
-                local p = cp["8"]
-                if p:FindFirstChild("interact") then
-                    capturePoints[3].air = p.interact:FindFirstChild("AirCaptureTarget")
-                    capturePoints[3].naval = p.interact:FindFirstChild("NavalCaptureTarget")
-                end
-            end
-        end
-    end)
+local function initCP()
+	pcall(function()
+		local cp=Workspace.Components.ControlPoints
+		local function grab(p,t) local i=p:FindFirstChild("interact") if i then t.air=i:FindFirstChild("AirCaptureTarget") t.ground=i:FindFirstChild("GroundCaptureTarget") t.naval=i:FindFirstChild("NavalCaptureTarget") end end
+		if cp:FindFirstChild("Center") then grab(cp.Center,capturePoints[1]) end
+		if cp:FindFirstChild("1") then grab(cp["1"],capturePoints[2]) end
+		if cp:FindFirstChild("8") then grab(cp["8"],capturePoints[3]) end
+	end)
 end
 
-local huntingBoss = false
-local lastBossPos = nil
+local hunting=false local lastBoss=nil
 
-local function getClosestPoint(bossPosition)
-    local closest, closestDist = nil, math.huge
-    for _, point in ipairs(capturePoints) do
-        local target = point.ground or point.air or point.naval
-        if target then
-            local dist = (target.Position - bossPosition).Magnitude
-            if dist < closestDist then
-                closestDist = dist
-                closest = point
-            end
-        end
-    end
-    return closest
+local function closestPoint(bp)
+	local cl,cd=nil,math.huge
+	for _,p in ipairs(capturePoints) do
+		local t=p.ground or p.air or p.naval
+		if t then local d=(t.Position-bp).Magnitude if d<cd then cd=d cl=p end end
+	end
+	return cl
+end
+
+local function tpTo(cp)
+	local r=getRoot() if not r then return end
+	local oc=r.CFrame
+	local pt=cp.ground or cp.naval or cp.air
+	if pt then r.CFrame=pt.CFrame task.wait(CONFIG.TP_SPEED) firePrompt(pt) end
+	if cp.air and cp.air~=pt then r.CFrame=cp.air.CFrame task.wait(CONFIG.TP_SPEED) firePrompt(cp.air) end
+	r.CFrame=oc
 end
 
 local function huntBoss()
-    if huntingBoss then return end
-    local activeUnits = Workspace:FindFirstChild("ActiveUnits")
-    if not activeUnits then return end
-
-    local bossFound = false
-    
-    for _, unit in ipairs(activeUnits:GetChildren()) do
-        if unit.Name:match("^BOSS:") then
-            bossFound = true
-            huntingBoss = true
-            local bossName = unit.Name
-            local bossRoot = unit:FindFirstChild("root") or unit:FindFirstChild("HumanoidRootPart") or unit:FindFirstChild("Torso")
-            if not bossRoot then
-                for _, child in ipairs(unit:GetDescendants()) do
-                    if child:IsA("BasePart") then
-                        bossRoot = child
-                        break
-                    end
-                end
-            end
-
-            if bossRoot then
-                local bossPos = bossRoot.Position
-                if lastBossPos and (bossPos - lastBossPos).Magnitude > 10 then
-                    local closestPoint = getClosestPoint(bossPos)
-                    if closestPoint then
-                        local targetType = closestPoint.ground and "ground" or (closestPoint.naval and "naval" or "air")
-                        logConsole('Boss moved, redirecting to "' .. closestPoint.name .. '" (' .. targetType .. ')')
-                        
-                        local root = getRoot()
-                        if root then
-                            local oldCFrame = root.CFrame
-                            local primaryTarget = closestPoint.ground or closestPoint.naval or closestPoint.air
-                            
-                            if primaryTarget then
-                                root.CFrame = primaryTarget.CFrame
-                                task.wait(CONFIG.TP_SPEED)
-                                firePrompt(primaryTarget)
-                            end
-                            
-                            if closestPoint.air and closestPoint.air ~= primaryTarget then
-                                root.CFrame = closestPoint.air.CFrame
-                                task.wait(CONFIG.TP_SPEED)
-                                firePrompt(closestPoint.air)
-                            end
-                            
-                            root.CFrame = oldCFrame
-                        end
-                    end
-                elseif not lastBossPos then
-                    stats.Bosses = stats.Bosses + 1
-                    updateStats()
-                    logConsole('Found boss "' .. bossName .. '"')
-                end
-                lastBossPos = bossPos
-            end
-            huntingBoss = false
-            break
-        end
-    end
-    
-    if not bossFound and lastBossPos then
-        lastBossPos = nil
-        logConsole("Boss ended, returning to Center")
-        
-        local root = getRoot()
-        if root and capturePoints[1].ground then
-            local oldCFrame = root.CFrame
-            root.CFrame = capturePoints[1].ground.CFrame
-            task.wait(CONFIG.TP_SPEED)
-            firePrompt(capturePoints[1].ground)
-            if capturePoints[1].air then
-                root.CFrame = capturePoints[1].air.CFrame
-                task.wait(CONFIG.TP_SPEED)
-                firePrompt(capturePoints[1].air)
-            end
-            root.CFrame = oldCFrame
-        end
-    end
+	if hunting then return end
+	local au=Workspace:FindFirstChild("ActiveUnits") if not au then return end
+	local found=false
+	for _,u in ipairs(au:GetChildren()) do
+		if u.Name:match("^BOSS:") then
+			found=true hunting=true
+			local br=u:FindFirstChild("root") or u:FindFirstChild("HumanoidRootPart") or u:FindFirstChild("Torso")
+			if not br then for _,c in ipairs(u:GetDescendants()) do if c:IsA("BasePart") then br=c break end end end
+			if br then
+				local bp=br.Position
+				if lastBoss and (bp-lastBoss).Magnitude>10 then
+					local cp=closestPoint(bp)
+					if cp then
+						log('Boss moved -> "'..cp.name..'"')
+						tpTo(cp)
+					end
+				elseif not lastBoss then
+					stats.B=stats.B+1 updStats()
+					log('Found boss "'..u.Name..'"')
+				end
+				lastBoss=bp
+			end
+			hunting=false
+			break
+		end
+	end
+	if not found and lastBoss then
+		lastBoss=nil
+		log("Boss ended, returning to Center")
+		if capturePoints[1].ground then tpTo(capturePoints[1]) end
+	end
 end
 
-local function cleanActiveUnits()
-    local activeUnits = Workspace:FindFirstChild("ActiveUnits")
-    if not activeUnits then return end
-    for _, unit in ipairs(activeUnits:GetChildren()) do
-        if not unit.Name:match("^BOSS:") then
-            local maxHealth = unit:GetAttribute("MaxHealth")
-            if maxHealth and maxHealth < CONFIG.MAX_HEALTH_DELETE then
-                pcall(function() unit:Destroy() end)
-                stats.Cleaned = stats.Cleaned + 1
-            end
-        end
-    end
-    updateStats()
+local function cleanUnits()
+	local au=Workspace:FindFirstChild("ActiveUnits") if not au then return end
+	for _,u in ipairs(au:GetChildren()) do
+		if not u.Name:match("^BOSS:") then
+			local mh=u:GetAttribute("MaxHealth")
+			if mh and mh<CONFIG.MAX_HEALTH_DELETE then
+				pcall(function() u:Destroy() end)
+				stats.C=stats.C+1
+			end
+		end
+	end
+	updStats()
 end
 
-initCapturePoints()
-cleanupWorkspace()
-logConsole("Ready")
+initCP() cleanupWorkspace() log("Ready")
 
-task.spawn(function()
-    while screenGui.Parent do
-        if states.m then pcall(scanShop) end
-        task.wait(CONFIG.REFRESH_RATE)
-    end
-end)
+task.spawn(function() while sg.Parent do if states.m then pcall(scanShop) end task.wait(CONFIG.REFRESH_RATE) end end)
+task.spawn(function() while sg.Parent do if states.b then pcall(huntBoss) end task.wait(CONFIG.REFRESH_RATE) end end)
+task.spawn(function() while sg.Parent do if states.c then pcall(cleanUnits) end task.wait(CONFIG.CLEAN_INTERVAL) end end)
 
-task.spawn(function()
-    while screenGui.Parent do
-        if states.b then pcall(huntBoss) end
-        task.wait(CONFIG.REFRESH_RATE)
-    end
-end)
-
-task.spawn(function()
-    while screenGui.Parent do
-        if states.c then pcall(cleanActiveUnits) end
-        task.wait(CONFIG.CLEAN_INTERVAL)
-    end
-end)
-
-local s = {3, 5, 10, 60}
-local i = 1
-local g = gethui()
-for _, v in pairs(g:GetChildren()) do
-    if v.Name == "FPSGui" then v:Destroy() end
-end
-local sg = Instance.new("ScreenGui", g)
-sg.Name = "FPSGui"
-sg.ResetOnSpawn = false
-local b = Instance.new("TextButton", sg)
-b.Size = UDim2.new(0, 80, 0, 25)
-b.Position = UDim2.new(1, -90, 0, 10)
-b.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
-b.BackgroundTransparency = .15
-b.Text = "FPS: OFF"
-b.TextColor3 = Color3.new(1, 1, 1)
-b.TextSize = 12
-b.Font = Enum.Font.Code
-b.MouseButton1Click:Connect(function()
-    i = i % 4 + 1
-    local f = s[i]
-    if setfpscap then setfpscap(f) end
-    b.Text = f ~= 60 and "FPS: " .. f or "FPS: OFF"
+local fps={3,5,10,60} local fi=1
+local g=gethui()
+for _,v in pairs(g:GetChildren()) do if v.Name=="FPSGui" then v:Destroy() end end
+local fg=Instance.new("ScreenGui",g) fg.Name="FPSGui" fg.ResetOnSpawn=false
+local fb=Instance.new("TextButton",fg)
+fb.Size=UDim2.new(0,70,0,16) fb.Position=UDim2.new(1,-80,0,10)
+fb.BackgroundColor3=GRAY fb.BorderSizePixel=1 fb.BorderColor3=DARK
+fb.Text="FPS: OFF" fb.TextColor3=Color3.new(0,0,0) fb.TextSize=10 fb.Font=Enum.Font.Code
+fb.MouseButton1Click:Connect(function()
+	fi=fi%4+1 local v=fps[fi]
+	if setfpscap then setfpscap(v) end
+	fb.Text=v~=60 and "FPS: "..v or "FPS: OFF"
 end)
