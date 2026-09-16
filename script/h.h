@@ -6,10 +6,9 @@ local RS = game:GetService("ReplicatedStorage")
 
 local CONFIG = {REFRESH_RATE=1, CLEAN_INTERVAL=2, MAX_HEALTH_DELETE=300000, AUTO_JUMP=true, TP_SPEED=0.3}
 
--- tkinter classic colors
-local C_WIN  = Color3.fromRGB(212,208,200) -- window gray
-local C_DARK = Color3.fromRGB(80,80,80)    -- border/text
-local C_LBL  = Color3.fromRGB(230,230,230) -- console bg
+local C_WIN  = Color3.fromRGB(212,208,200)
+local C_DARK = Color3.fromRGB(80,80,80)
+local C_LBL  = Color3.fromRGB(230,230,230)
 
 local PurchaseRemote = RS:WaitForChild("Shared"):WaitForChild("Resources"):WaitForChild("VendorResources"):WaitForChild("Remotes"):WaitForChild("PurchaseStructure")
 
@@ -38,7 +37,6 @@ local consoleLabels={}
 local function updateConsole() for i=1,3 do if consoleLabels[i] then consoleLabels[i].Text=consoleLines[i] end end end
 local function logConsole(m) table.remove(consoleLines,1) table.insert(consoleLines,m) updateConsole() end
 
--- ============ UI ============
 local screenGui=Instance.new("ScreenGui")
 screenGui.Name="A"
 screenGui.ResetOnSpawn=false
@@ -56,7 +54,6 @@ mainFrame.Active=true
 mainFrame.Draggable=true
 mainFrame.Parent=screenGui
 
--- title bar
 local titleBar=Instance.new("Frame")
 titleBar.Size=UDim2.new(1,0,0,TITLE_H)
 titleBar.BackgroundColor3=C_WIN
@@ -73,7 +70,6 @@ title.TextSize=11
 title.Font=Enum.Font.Code
 title.Parent=titleBar
 
--- minimize button (classic square glyph)
 local minBtn=Instance.new("TextButton")
 minBtn.Size=UDim2.new(0,16,0,14)
 minBtn.Position=UDim2.new(1,-34,0,2)
@@ -86,7 +82,6 @@ minBtn.TextSize=11
 minBtn.Font=Enum.Font.Code
 minBtn.Parent=titleBar
 
--- close button
 local closeBtn=Instance.new("TextButton")
 closeBtn.Size=UDim2.new(0,16,0,14)
 closeBtn.Position=UDim2.new(1,-17,0,2)
@@ -99,7 +94,6 @@ closeBtn.TextSize=11
 closeBtn.Font=Enum.Font.Code
 closeBtn.Parent=titleBar
 
--- body (collapsible)
 local body=Instance.new("Frame")
 body.Size=UDim2.new(1,0,1,-TITLE_H)
 body.Position=UDim2.new(0,0,0,TITLE_H)
@@ -107,7 +101,6 @@ body.BackgroundTransparency=1
 body.BorderSizePixel=0
 body.Parent=mainFrame
 
--- console box
 local consoleBox=Instance.new("Frame")
 consoleBox.Size=UDim2.new(1,-8,0,45)
 consoleBox.Position=UDim2.new(0,4,0,4)
@@ -175,7 +168,6 @@ statsLabel.Parent=body
 
 local function updateStats() statsLabel.Text=string.format("M:%d B:%d C:%d",stats.Mythics,stats.Bosses,stats.Cleaned) end
 
--- minimize behavior
 local minimized=false
 minBtn.MouseButton1Click:Connect(function()
     minimized=not minimized
@@ -185,7 +177,6 @@ end)
 
 closeBtn.MouseButton1Click:Connect(function() screenGui:Destroy() end)
 
--- ============ LOGIC (same as before) ============
 local function getRoot() local c=LocalPlayer.Character return c and c:FindFirstChild("HumanoidRootPart") end
 
 local function autoJump()
@@ -273,6 +264,7 @@ end
 
 local huntingBoss=false
 local lastBossPos=nil
+local currentBossPos=nil
 
 local function getClosestPoint(bp)
     local cl,cd=nil,math.huge
@@ -286,37 +278,46 @@ local function getClosestPoint(bp)
     return cl
 end
 
+local function tpTo(cp)
+    local r=getRoot() if not r then return end
+    local oc=r.CFrame
+    local pt=cp.ground or cp.naval or cp.air
+    if pt then r.CFrame=pt.CFrame task.wait(CONFIG.TP_SPEED) firePrompt(pt) end
+    if cp.air and cp.air~=pt then r.CFrame=cp.air.CFrame task.wait(CONFIG.TP_SPEED) firePrompt(cp.air) end
+    r.CFrame=oc
+end
+
 local function huntBoss()
     if huntingBoss then return end
     local au=Workspace:FindFirstChild("ActiveUnits") if not au then return end
     local bossFound=false
     for _,u in ipairs(au:GetChildren()) do
-        if u.Name:match("^BOSS:") then
+        local bn=u:GetAttribute("BossName")
+        if bn then
             bossFound=true
             huntingBoss=true
-            local bn=u.Name
             local br=u:FindFirstChild("root") or u:FindFirstChild("HumanoidRootPart") or u:FindFirstChild("Torso")
             if not br then for _,c in ipairs(u:GetDescendants()) do if c:IsA("BasePart") then br=c break end end end
             if br then
-                local bp=br.Position
-                if lastBossPos and (bp-lastBossPos).Magnitude>10 then
-                    local cp=getClosestPoint(bp)
-                    if cp then
-                        local tt=cp.ground and "ground" or (cp.naval and "naval" or "air")
-                        logConsole('Boss moved, redirecting to "'..cp.name..'" ('..tt..')')
-                        local r=getRoot()
-                        if r then
-                            local oc=r.CFrame
-                            local pt=cp.ground or cp.naval or cp.air
-                            if pt then r.CFrame=pt.CFrame task.wait(CONFIG.TP_SPEED) firePrompt(pt) end
-                            if cp.air and cp.air~=pt then r.CFrame=cp.air.CFrame task.wait(CONFIG.TP_SPEED) firePrompt(cp.air) end
-                            r.CFrame=oc
-                        end
-                    end
-                elseif not lastBossPos then
+                local wc=br:GetAttribute("WorldCFrame")
+                local bp=wc and Vector3.new(wc.X,wc.Y,wc.Z) or br.Position
+                currentBossPos=bp
+                local cp=getClosestPoint(bp)
+                if not lastBossPos then
                     stats.Bosses=stats.Bosses+1
                     updateStats()
                     logConsole('Found boss "'..bn..'"')
+                    if cp then
+                        local tt=cp.ground and "ground" or (cp.naval and "naval" or "air")
+                        logConsole('Closest to "'..cp.name..'" ('..tt..')')
+                        tpTo(cp)
+                    end
+                elseif (bp-lastBossPos).Magnitude>10 then
+                    if cp then
+                        local tt=cp.ground and "ground" or (cp.naval and "naval" or "air")
+                        logConsole('Boss moved, redirecting to "'..cp.name..'" ('..tt..')')
+                        tpTo(cp)
+                    end
                 end
                 lastBossPos=bp
             end
@@ -326,23 +327,16 @@ local function huntBoss()
     end
     if not bossFound and lastBossPos then
         lastBossPos=nil
+        currentBossPos=nil
         logConsole("Boss ended, returning to Center")
-        local r=getRoot()
-        if r and capturePoints[1].ground then
-            local oc=r.CFrame
-            r.CFrame=capturePoints[1].ground.CFrame
-            task.wait(CONFIG.TP_SPEED)
-            firePrompt(capturePoints[1].ground)
-            if capturePoints[1].air then r.CFrame=capturePoints[1].air.CFrame task.wait(CONFIG.TP_SPEED) firePrompt(capturePoints[1].air) end
-            r.CFrame=oc
-        end
+        if capturePoints[1].ground then tpTo(capturePoints[1]) end
     end
 end
 
 local function cleanActiveUnits()
     local au=Workspace:FindFirstChild("ActiveUnits") if not au then return end
     for _,u in ipairs(au:GetChildren()) do
-        if not u.Name:match("^BOSS:") then
+        if not u:GetAttribute("BossName") then
             local mh=u:GetAttribute("MaxHealth")
             if mh and mh<CONFIG.MAX_HEALTH_DELETE then
                 pcall(function() u:Destroy() end)
@@ -361,7 +355,6 @@ task.spawn(function() while screenGui.Parent do if states.m then pcall(scanShop)
 task.spawn(function() while screenGui.Parent do if states.b then pcall(huntBoss) end task.wait(CONFIG.REFRESH_RATE) end end)
 task.spawn(function() while screenGui.Parent do if states.c then pcall(cleanActiveUnits) end task.wait(CONFIG.CLEAN_INTERVAL) end end)
 
--- ============ FPS BUTTON ============
 local s={3,5,10,60}
 local i=1
 local g=gethui()
