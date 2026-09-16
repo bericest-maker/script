@@ -135,7 +135,7 @@ local function initCP()
 	end)
 end
 
-local hunting=false local lastBoss=nil local currentBossPos=nil
+local hunting=false local lastBoss=nil
 
 local function closestPoint(bp)
 	local cl,cd=nil,math.huge
@@ -160,30 +160,21 @@ local function huntBoss()
 	local au=Workspace:FindFirstChild("ActiveUnits") if not au then return end
 	local found=false
 	for _,u in ipairs(au:GetChildren()) do
-		local bn=u:GetAttribute("BossName")
-		if bn then
+		if u.Name:match("^BOSS:") then
 			found=true hunting=true
 			local br=u:FindFirstChild("root") or u:FindFirstChild("HumanoidRootPart") or u:FindFirstChild("Torso")
 			if not br then for _,c in ipairs(u:GetDescendants()) do if c:IsA("BasePart") then br=c break end end end
 			if br then
-				local wc=br:GetAttribute("WorldCFrame")
-				local bp=wc and Vector3.new(wc.X,wc.Y,wc.Z) or br.Position
-				currentBossPos=bp
-				local cp=closestPoint(bp)
-				if not lastBoss then
+				local bp=br.Position
+				if lastBoss and (bp-lastBoss).Magnitude>10 then
+					local cp=closestPoint(bp)
+					if cp then
+						log('Boss moved -> "'..cp.name..'"')
+						tpTo(cp)
+					end
+				elseif not lastBoss then
 					stats.B=stats.B+1 updStats()
-					log('Found boss "'..bn..'"')
-					if cp then
-						local tt=cp.ground and "ground" or (cp.naval and "naval" or "air")
-						log('Closest to "'..cp.name..'" ('..tt..')')
-						tpTo(cp)
-					end
-				elseif (bp-lastBoss).Magnitude>10 then
-					if cp then
-						local tt=cp.ground and "ground" or (cp.naval and "naval" or "air")
-						log('Boss moved -> "'..cp.name..'" ('..tt..')')
-						tpTo(cp)
-					end
+					log('Found boss "'..u.Name..'"')
 				end
 				lastBoss=bp
 			end
@@ -192,7 +183,7 @@ local function huntBoss()
 		end
 	end
 	if not found and lastBoss then
-		lastBoss=nil currentBossPos=nil
+		lastBoss=nil
 		log("Boss ended, returning to Center")
 		if capturePoints[1].ground then tpTo(capturePoints[1]) end
 	end
@@ -201,7 +192,7 @@ end
 local function cleanUnits()
 	local au=Workspace:FindFirstChild("ActiveUnits") if not au then return end
 	for _,u in ipairs(au:GetChildren()) do
-		if not u:GetAttribute("BossName") then
+		if not u.Name:match("^BOSS:") then
 			local mh=u:GetAttribute("MaxHealth")
 			if mh and mh<CONFIG.MAX_HEALTH_DELETE then
 				pcall(function() u:Destroy() end)
