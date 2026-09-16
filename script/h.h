@@ -199,6 +199,7 @@ end
 
 local huntingBoss=false
 local lastBossPos=nil
+local currentBossPos=nil
 
 local function getClosestPoint(bp)
     local cl,cd=nil,math.huge
@@ -210,6 +211,17 @@ local function getClosestPoint(bp)
         end
     end
     return cl
+end
+
+local function fireAtPoint(cp)
+    local r=getRoot()
+    if r and cp then
+        local oc=r.CFrame
+        local pt=cp.ground or cp.naval or cp.air
+        if pt then r.CFrame=pt.CFrame task.wait(CONFIG.TP_SPEED) firePrompt(pt) end
+        if cp.air and cp.air~=pt then r.CFrame=cp.air.CFrame task.wait(CONFIG.TP_SPEED) firePrompt(cp.air) end
+        r.CFrame=oc
+    end
 end
 
 local function huntBoss()
@@ -226,24 +238,23 @@ local function huntBoss()
             if br then
                 local wc=br:GetAttribute("WorldCFrame")
                 local bp=wc and Vector3.new(wc.X,wc.Y,wc.Z) or br.Position
-                if lastBossPos and (bp-lastBossPos).Magnitude>10 then
-                    local cp=getClosestPoint(bp)
-                    if cp then
-                        local tt=cp.ground and "ground" or (cp.naval and "naval" or "air")
-                        logConsole('Boss moved, redirecting to "'..cp.name..'" ('..tt..')')
-                        local r=getRoot()
-                        if r then
-                            local oc=r.CFrame
-                            local pt=cp.ground or cp.naval or cp.air
-                            if pt then r.CFrame=pt.CFrame task.wait(CONFIG.TP_SPEED) firePrompt(pt) end
-                            if cp.air and cp.air~=pt then r.CFrame=cp.air.CFrame task.wait(CONFIG.TP_SPEED) firePrompt(cp.air) end
-                            r.CFrame=oc
-                        end
-                    end
-                elseif not lastBossPos then
+                currentBossPos=bp
+                local cp=getClosestPoint(bp)
+                if not lastBossPos then
                     stats.Bosses=stats.Bosses+1
                     updateStats()
                     logConsole('Found boss "'..bn..'"')
+                    if cp then
+                        local tt=cp.ground and "ground" or (cp.naval and "naval" or "air")
+                        logConsole('Closest to "'..cp.name..'" ('..tt..')')
+                        fireAtPoint(cp)
+                    end
+                elseif (bp-lastBossPos).Magnitude>10 then
+                    if cp then
+                        local tt=cp.ground and "ground" or (cp.naval and "naval" or "air")
+                        logConsole('Boss moved, redirecting to "'..cp.name..'" ('..tt..')')
+                        fireAtPoint(cp)
+                    end
                 end
                 lastBossPos=bp
             end
@@ -253,6 +264,7 @@ local function huntBoss()
     end
     if not bossFound and lastBossPos then
         lastBossPos=nil
+        currentBossPos=nil
         logConsole("Boss ended, returning to Center")
         local r=getRoot()
         if r and capturePoints[1].ground then
