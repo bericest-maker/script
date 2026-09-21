@@ -449,46 +449,41 @@ b.MouseButton1Click:Connect(function()
 end)
 
 task.spawn(function()
-    local player = game:GetService("Players").LocalPlayer
-    local playerGui = player:WaitForChild("PlayerGui")
+    local player = Players.LocalPlayer
+    local inventoryFrame = player.PlayerGui.inventoryUI.main.inventoryFrame
 
-    local inventoryFrame =
-        playerGui.inventoryUI.main.inventoryFrame
-
-    local frameList = inventoryFrame:FindFirstChildWhichIsA(
-        "ScrollingFrame",
-        true
-    )
-
-    if not frameList then
-        warn("no scrolling frame found")
-        return
-    end
+    local lists = {
+        inventoryFrame.production,
+        inventoryFrame.decoration,
+        inventoryFrame.special,
+        inventoryFrame.units
+    }
 
     local seen = {}
 
-    task.wait(5)
-
-    -- store everything already there
-    for _, obj in ipairs(frameList:GetChildren()) do
-        if obj:IsA("Frame") then
-            seen[obj.Name] = true
-            print("stored:", obj.Name)
+    -- store everything that already exists
+    for _, list in ipairs(lists) do
+        for _, obj in ipairs(list:GetChildren()) do
+            if obj:IsA("Frame") then
+                seen[obj.Name] = true
+            end
         end
     end
 
-    print("finished initial scan")
+    print("inventory items stored")
 
-    -- only send new ones
+    -- check for new items every 1 second
     while screenGui.Parent do
         task.wait(1)
 
-        for _, obj in ipairs(frameList:GetChildren()) do
-            if obj:IsA("Frame") and not seen[obj.Name] then
-                seen[obj.Name] = true
+        for _, list in ipairs(lists) do
+            for _, obj in ipairs(list:GetChildren()) do
+                if obj:IsA("Frame") and not seen[obj.Name] then
+                    seen[obj.Name] = true
 
-                print("NEW:", obj.Name)
-                sendWebhook("new: " .. obj.Name)
+                    print("NEW ITEM:", obj.Name)
+                    sendWebhook("new item: " .. obj.Name)
+                end
             end
         end
     end
