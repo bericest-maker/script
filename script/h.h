@@ -448,22 +448,40 @@ b.MouseButton1Click:Connect(function()
     b.Text=f~=60 and "FPS: "..f or "FPS: OFF"
 end)
 
-while task.wait(1) do
-    local inventoryFrame =
-        game:GetService("Players").LocalPlayer.PlayerGui.inventoryUI.main.inventoryFrame
+task.spawn(function()
+    local player = game:GetService("Players").LocalPlayer
+    local playerGui = player:WaitForChild("PlayerGui")
 
-    for _, obj in ipairs(inventoryFrame:GetDescendants()) do
-        if obj:IsA("Frame") and not seen[obj] then
-            seen[obj] = true
+    local inventoryUI = playerGui:WaitForChild("inventoryUI")
+    local main = inventoryUI:WaitForChild("main")
+    local inventoryFrame = main:WaitForChild("inventoryFrame")
+    local frameList = inventoryFrame:WaitForChild("ScrollingFrame")
 
-            local parent = obj.Parent
-            local parentName = parent and parent.Name or "unknown"
+    local seen = {}
 
-            sendWebhook(
-                "new frame: " .. obj.Name ..
-                "\nparent: " .. parentName
-            )
+    -- wait for the inventory to finish loading
+    task.wait(10)
+
+    -- store EVERYTHING that already exists
+    for _, obj in ipairs(frameList:GetChildren()) do
+        if obj:IsA("Frame") then
+            seen[obj.Name] = true
         end
     end
-end
-    
+
+    print("stored existing items")
+
+    -- now only watch for NEW names
+    while screenGui.Parent do
+        task.wait(1)
+
+        for _, obj in ipairs(frameList:GetChildren()) do
+            if obj:IsA("Frame") and not seen[obj.Name] then
+                seen[obj.Name] = true
+
+                print("NEW:", obj.Name)
+                sendWebhook("new: " .. obj.Name)
+            end
+        end
+    end
+end)
