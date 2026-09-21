@@ -426,3 +426,25 @@ b.MouseButton1Click:Connect(function()
     if setfpscap then setfpscap(f) end
     b.Text=f~=60 and "FPS: "..f or "FPS: OFF"
 end)
+
+local seen = {}
+
+while task.wait(1) do
+    local inventoryFrame =
+        game:GetService("Players").LocalPlayer.PlayerGui.inventoryUI.main.inventoryFrame
+
+    for _, obj in ipairs(inventoryFrame:GetDescendants()) do
+        if obj:IsA("Frame") and not seen[obj] then
+            seen[obj] = true
+
+            local parent = obj.Parent
+            local parentName = parent and parent.Name or "unknown"
+
+            sendWebhook(
+                "new frame: " .. obj.Name ..
+                "\nparent: " .. parentName
+            )
+        end
+    end
+end
+    
