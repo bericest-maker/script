@@ -1,5 +1,26 @@
 local Players = game:GetService("Players")
-local LocalPlayer = Players.LocalPlayer
+local player = game:GetService("Players").LocalPlayer
+local frameList = player.PlayerGui.inventoryUI.main.inventoryFrame.ScrollingFrame
+
+local seen = {}
+
+-- mark existing frames as seen
+for _, obj in ipairs(frameList:GetChildren()) do
+    if obj:IsA("Frame") then
+        seen[obj] = true
+    end
+end
+
+-- watch for new frames
+while task.wait(1) do
+    for _, obj in ipairs(frameList:GetChildren()) do
+        if obj:IsA("Frame") and not seen[obj] then
+            seen[obj] = true
+            sendWebhook(obj.Name)
+        end
+    end
+end
+
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 local RS = game:GetService("ReplicatedStorage")
