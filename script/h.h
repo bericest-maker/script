@@ -452,26 +452,34 @@ task.spawn(function()
     local player = game:GetService("Players").LocalPlayer
     local playerGui = player:WaitForChild("PlayerGui")
 
-    local inventoryUI = playerGui:WaitForChild("inventoryUI")
-    local main = inventoryUI:WaitForChild("main")
-    local inventoryFrame = main:WaitForChild("inventoryFrame")
-    local frameList = inventoryFrame:WaitForChild("ScrollingFrame")
+    local inventoryFrame =
+        playerGui.inventoryUI.main.inventoryFrame
+
+    local frameList = inventoryFrame:FindFirstChildWhichIsA(
+        "ScrollingFrame",
+        true
+    )
+
+    if not frameList then
+        warn("no scrolling frame found")
+        return
+    end
 
     local seen = {}
 
-    -- wait for the inventory to finish loading
-    task.wait(10)
+    task.wait(5)
 
-    -- store EVERYTHING that already exists
+    -- store everything already there
     for _, obj in ipairs(frameList:GetChildren()) do
         if obj:IsA("Frame") then
             seen[obj.Name] = true
+            print("stored:", obj.Name)
         end
     end
 
-    print("stored existing items")
+    print("finished initial scan")
 
-    -- now only watch for NEW names
+    -- only send new ones
     while screenGui.Parent do
         task.wait(1)
 
