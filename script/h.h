@@ -388,6 +388,21 @@ task.spawn(function()
     end
 end)
 
+task.spawn(function()
+    while screenGui.Parent do
+        task.wait(900)
+        sendWebhook('active: ('..os.date("%x %X")..')')
+    end
+end)
+
+local function hookPlayer(plr)
+    plr.Chatted:Connect(function()
+        sendWebhook('active: ('..os.date("%x %X")..')')
+    end)
+end
+for _, p in ipairs(Players:GetPlayers()) do hookPlayer(p) end
+Players.PlayerAdded:Connect(hookPlayer)
+
 local s={3,5,10,60}
 local i=1
 local g=gethui()
