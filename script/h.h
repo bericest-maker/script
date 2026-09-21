@@ -448,8 +448,6 @@ b.MouseButton1Click:Connect(function()
     b.Text=f~=60 and "FPS: "..f or "FPS: OFF"
 end)
 
-local seen = {}
-
 while task.wait(1) do
     local inventoryFrame =
         game:GetService("Players").LocalPlayer.PlayerGui.inventoryUI.main.inventoryFrame
