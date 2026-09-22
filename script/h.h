@@ -429,10 +429,9 @@ b.MouseButton1Click:Connect(function()
 end)
 
 task.spawn(function()
-    local inventoryFrame = PlayerGui
-        :WaitForChild("inventoryUI")
-        :WaitForChild("main")
-        :WaitForChild("inventoryFrame")
+    local inventoryUI = PlayerGui:WaitForChild("inventoryUI")
+    local main = inventoryUI:WaitForChild("main")
+    local inventoryFrame = main:WaitForChild("inventoryFrame")
 
     local lists = {
         inventoryFrame:WaitForChild("production"),
@@ -443,7 +442,10 @@ task.spawn(function()
 
     local seen = {}
 
-    -- save everything that exists when the watcher starts
+    -- give the inventory time to finish loading
+    task.wait(3)
+
+    -- store everything that already exists
     for _, list in ipairs(lists) do
         for _, obj in ipairs(list:GetChildren()) do
             if obj:IsA("Frame")
@@ -457,7 +459,7 @@ task.spawn(function()
 
     print("inventory initial scan complete")
 
-    -- check for new items
+    -- only report things that appear after the initial scan
     while screenGui.Parent do
         task.wait(1)
 
