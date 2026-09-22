@@ -428,36 +428,45 @@ b.MouseButton1Click:Connect(function()
 end)
 
 task.spawn(function()
-    local player = Players.LocalPlayer
-    local inventoryFrame = player.PlayerGui.inventoryUI.main.inventoryFrame
+    local inventoryFrame = PlayerGui
+        :WaitForChild("inventoryUI")
+        :WaitForChild("main")
+        :WaitForChild("inventoryFrame")
 
     local lists = {
-        inventoryFrame.production,
-        inventoryFrame.decoration,
-        inventoryFrame.special,
-        inventoryFrame.units
+        inventoryFrame:WaitForChild("production"),
+        inventoryFrame:WaitForChild("decoration"),
+        inventoryFrame:WaitForChild("special"),
+        inventoryFrame:WaitForChild("units")
     }
 
     local seen = {}
 
-    -- store everything that already exists
+    -- save everything that exists when the watcher starts
     for _, list in ipairs(lists) do
         for _, obj in ipairs(list:GetChildren()) do
-            if obj:IsA("Frame") then
+            if obj:IsA("Frame")
+                and obj.Name ~= "TEMPLATE"
+                and obj.Name ~= "spacer" then
+
                 seen[obj.Name] = true
             end
         end
     end
 
-    print("inventory items stored")
+    print("inventory initial scan complete")
 
-    -- check for new items every 1 second
+    -- check for new items
     while screenGui.Parent do
         task.wait(1)
 
         for _, list in ipairs(lists) do
             for _, obj in ipairs(list:GetChildren()) do
-                if obj:IsA("Frame") and not seen[obj.Name] then
+                if obj:IsA("Frame")
+                    and obj.Name ~= "TEMPLATE"
+                    and obj.Name ~= "spacer"
+                    and not seen[obj.Name] then
+
                     seen[obj.Name] = true
 
                     print("NEW ITEM:", obj.Name)
