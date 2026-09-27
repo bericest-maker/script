@@ -479,3 +479,49 @@ task.spawn(function()
         end
     end
 end)
+
+task.spawn(function()
+    local crateList = workspace.Components.ControlPoints.Center.Model.capturePointUI.main.rewardFrame.crateList
+    local countdown = workspace.Components.ControlPoints.Center.Model.capturePointUI.main.rewardFrame.countdown
+
+    local lastCrate = nil
+    local lastTime = nil
+
+    while task.wait(5) do
+        local currentCrate = nil
+
+        for _, name in ipairs({"eliteCrate", "premiumCrate", "standardCrate"}) do
+            local crate = crateList:FindFirstChild(name)
+
+            if crate and crate.Visible then
+                currentCrate = name
+                break
+            end
+        end
+
+        local minutes, seconds = countdown.Text:match("(%d+):(%d+)")
+        local currentTime = nil
+
+        if minutes and seconds then
+            currentTime = tonumber(minutes) * 60 + tonumber(seconds)
+        end
+
+        -- timer went back up = new 5 minute cycle
+        if lastTime and currentTime and currentTime > lastTime then
+            lastCrate = nil
+        end
+
+        -- premium crate detected
+        if currentCrate == "premiumCrate" and currentCrate ~= lastCrate then
+            print("GOT PREMIUM CRATE")
+
+            sendWebhook("🎁 premium crate detected!")
+
+            lastCrate = currentCrate
+        elseif currentCrate and currentCrate ~= lastCrate then
+            lastCrate = currentCrate
+        end
+
+        lastTime = currentTime
+    end
+end)
