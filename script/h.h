@@ -33,18 +33,36 @@ local function cleanupWorkspace()
         local t = Workspace:FindFirstChild("Terrain")
         if t then t:Destroy() end
     end)
+
     pcall(function()
         for _,c in ipairs(Workspace.Center:GetChildren()) do
             if c.Name ~= "OceanCollision" then c:Destroy() end
         end
     end)
+
     pcall(function()
         for _,p in ipairs(Workspace.Plots:GetChildren()) do
             p:Destroy()
         end
     end)
+
     pcall(function()
-        for _,w in ipairs(Workspace.Components.Weather:GetChildren()) do w:Destroy() end
+        for _,w in ipairs(Workspace.Components.Weather:GetChildren()) do
+            w:Destroy()
+        end
+    end)
+
+    pcall(function()
+        local outposts = Workspace.Components:FindFirstChild("Outposts")
+        if not outposts then return end
+
+        for _,outpost in ipairs(outposts:GetChildren()) do
+            for _,child in ipairs(outpost:GetChildren()) do
+                if child.Name:sub(1, 1):lower() == "a" then
+                    child:Destroy()
+                end
+            end
+        end
     end)
 end
 
