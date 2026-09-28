@@ -15,7 +15,7 @@ local function v3(v)
 end
 
 local function rot(cf)
-    local x,y,z = cf:ToOrientation()
+    local x, y, z = cf:ToOrientation()
     return n(math.deg(x))..","..n(math.deg(y))..","..n(math.deg(z))
 end
 
@@ -23,14 +23,35 @@ local function getProp(obj, prop)
     local ok, v = pcall(function()
         return obj[prop]
     end)
+
     return ok and v or nil
 end
 
-local function exportPart(part, root)
-    local cf = part.CFrame
+-- works for BOTH Models and Folders
+local function getRootCFrame(building)
+    if building:IsA("Model") then
+        local ok, pivot = pcall(function()
+            return building:GetPivot()
+        end)
 
-    -- position relative to building root
-    local relative = root:GetPivot():ToObjectSpace(cf)
+        if ok and pivot then
+            return pivot
+        end
+    end
+
+    -- Folder or Model without usable pivot:
+    -- use the first BasePart as the reference point
+    for _, obj in ipairs(building:GetDescendants()) do
+        if obj:IsA("BasePart") then
+            return obj.CFrame
+        end
+    end
+
+    return CFrame.new()
+end
+
+local function exportPart(part, rootCFrame)
+    local relative = rootCFrame:ToObjectSpace(part.CFrame)
 
     local out = {
         part.Name,
@@ -40,31 +61,35 @@ local function exportPart(part, root)
         rot(relative)
     }
 
-    -- only include mesh data when actually needed
+    -- MeshPart data
     if part:IsA("MeshPart") then
         local mesh = getProp(part, "MeshId")
         local tex = getProp(part, "TextureID")
 
         if mesh and mesh ~= "" then
-            out[#out+1] = "m=" .. mesh
+            out[#out + 1] = "m=" .. mesh
         end
 
         if tex and tex ~= "" then
-            out[#out+1] = "t=" .. tex
+            out[#out + 1] = "t=" .. tex
         end
     end
 
-    -- only store non-default values
+    -- Transparency
     if part.Transparency ~= 0 then
-        out[#out+1] = "a=" .. n(part.Transparency)
+        out[#out + 1] = "a=" .. n(part.Transparency)
     end
 
+    -- Material
     if part.Material ~= Enum.Material.Plastic then
-        out[#out+1] = "mat=" .. tostring(part.Material):gsub("Enum.Material.","")
+        out[#out + 1] =
+            "mat=" .. tostring(part.Material):gsub("Enum.Material.", "")
     end
 
-    if part.Color ~= Color3.fromRGB(163,162,165) then
-        out[#out+1] = "c="
+    -- Color
+    if part.Color ~= Color3.fromRGB(163, 162, 165) then
+        out[#out + 1] =
+            "c="
             .. n(part.Color.R)
             .. ","
             .. n(part.Color.G)
@@ -76,15 +101,16 @@ local function exportPart(part, root)
 end
 
 local function exportBuilding(building)
-    local lines = {
-        "[" .. building.Name .. "]"
-    }
+    local rootCFrame = getRootCFrame(building)
 
-    local root = building
+    local lines = {
+        "[" .. building.Name .. "]",
+        "ROOT|" .. v3(rootCFrame.Position)
+    }
 
     for _, obj in ipairs(building:GetDescendants()) do
         if obj:IsA("BasePart") then
-            lines[#lines+1] = exportPart(obj, root)
+            lines[#lines + 1] = exportPart(obj, rootCFrame)
         end
     end
 
@@ -103,30 +129,42 @@ for _, building in ipairs(Structures:GetChildren()) do
             and type(data) == "table"
             and data.BuildingCategory ~= "Decoration"
         then
-            buildings[#buildings+1] = exportBuilding(building)
+            local exported = exportBuilding(building)
+
+            -- only keep buildings that actually contain parts
+            if exported:find("\n", 1, true) then
+                buildings[#buildings + 1] = exported
+            end
         end
     end
 end
 
-print("exporting "..#buildings.." buildings")
+print("exporting " .. #buildings .. " buildings")
 
 local function sendFile(content, filename)
-    local boundary = "----Delta" .. tostring(math.random(100000,999999))
+    local boundary =
+        "----Delta" .. tostring(math.random(100000, 999999))
 
     local body =
-        "--"..boundary.."\r\n" ..
-        'Content-Disposition: form-data; name="file"; filename="'..filename..'"\r\n' ..
-        "Content-Type: text/plain\r\n\r\n" ..
-        content ..
-        "\r\n--"..boundary.."--\r\n"
+        "--" .. boundary .. "\r\n"
+        .. 'Content-Disposition: form-data; name="file"; filename="'
+        .. filename
+        .. '"\r\n'
+        .. "Content-Type: text/plain\r\n\r\n"
+        .. content
+        .. "\r\n--"
+        .. boundary
+        .. "--\r\n"
 
     return request({
         Url = WEBHOOK,
         Method = "POST",
+
         Headers = {
             ["Content-Type"] =
-                "multipart/form-data; boundary="..boundary
+                "multipart/form-data; boundary=" .. boundary
         },
+
         Body = body
     })
 end
@@ -148,10 +186,17 @@ for batch = 1, total do
     end
 
     local filename =
-        string.format("Buildings_%02d_of_%02d.txt", batch, total)
+        string.format(
+            "Buildings_%02d_of_%02d.txt",
+            batch,
+            total
+        )
 
     if writefile then
-        writefile("Buildings/"..filename, content)
+        writefile(
+            "Buildings/" .. filename,
+            content
+        )
     end
 
     local ok, response = pcall(function()
@@ -159,9 +204,17 @@ for batch = 1, total do
     end)
 
     print(
-        "batch "..batch.."/"..total..
-        " | buildings "..start.."-"..finish..
-        " | "..#content.." chars"
+        "batch "
+        .. batch
+        .. "/"
+        .. total
+        .. " | buildings "
+        .. start
+        .. "-"
+        .. finish
+        .. " | "
+        .. #content
+        .. " chars"
     )
 
     if not ok then
