@@ -1,229 +1,59 @@
-local WEBHOOK = "https://discord.com/api/webhooks/1529331358030106634/BgNcGV0x4t-qDE__u9Z-jAEdfQ7cpGogadEOe7JK4GR5cT80Lp0gaGv1qrTkBtUJM2jh"
+local Traits = game:GetService("ReplicatedStorage")
+    .Shared.Resources.TraitResources.Traits
 
-local RS = game:GetService("ReplicatedStorage")
-local Structures = RS.Shared.Resources.PlotResources.Structures
+local output = {}
 
-local BATCH_SIZE = 50
-local WAIT_TIME = 2
-
-local function n(x)
-    return string.format("%.2f", x):gsub("%.00$", "")
-end
-
-local function v3(v)
-    return n(v.X)..","..n(v.Y)..","..n(v.Z)
-end
-
-local function rot(cf)
-    local x, y, z = cf:ToOrientation()
-    return n(math.deg(x))..","..n(math.deg(y))..","..n(math.deg(z))
-end
-
-local function getProp(obj, prop)
-    local ok, v = pcall(function()
-        return obj[prop]
-    end)
-
-    return ok and v or nil
-end
-
--- works for BOTH Models and Folders
-local function getRootCFrame(building)
-    if building:IsA("Model") then
-        local ok, pivot = pcall(function()
-            return building:GetPivot()
-        end)
-
-        if ok and pivot then
-            return pivot
-        end
-    end
-
-    -- Folder or Model without usable pivot:
-    -- use the first BasePart as the reference point
-    for _, obj in ipairs(building:GetDescendants()) do
-        if obj:IsA("BasePart") then
-            return obj.CFrame
-        end
-    end
-
-    return CFrame.new()
-end
-
-local function exportPart(part, rootCFrame)
-    local relative = rootCFrame:ToObjectSpace(part.CFrame)
-
-    local out = {
-        part.Name,
-        part.ClassName,
-        v3(part.Size),
-        v3(relative.Position),
-        rot(relative)
-    }
-
-    -- MeshPart data
-    if part:IsA("MeshPart") then
-        local mesh = getProp(part, "MeshId")
-        local tex = getProp(part, "TextureID")
-
-        if mesh and mesh ~= "" then
-            out[#out + 1] = "m=" .. mesh
-        end
-
-        if tex and tex ~= "" then
-            out[#out + 1] = "t=" .. tex
-        end
-    end
-
-    -- Transparency
-    if part.Transparency ~= 0 then
-        out[#out + 1] = "a=" .. n(part.Transparency)
-    end
-
-    -- Material
-    if part.Material ~= Enum.Material.Plastic then
-        out[#out + 1] =
-            "mat=" .. tostring(part.Material):gsub("Enum.Material.", "")
-    end
-
-    -- Color
-    if part.Color ~= Color3.fromRGB(163, 162, 165) then
-        out[#out + 1] =
-            "c="
-            .. n(part.Color.R)
-            .. ","
-            .. n(part.Color.G)
-            .. ","
-            .. n(part.Color.B)
-    end
-
-    return table.concat(out, "|")
-end
-
-local function exportBuilding(building)
-    local rootCFrame = getRootCFrame(building)
-
-    local lines = {
-        "[" .. building.Name .. "]",
-        "ROOT|" .. v3(rootCFrame.Position)
-    }
-
-    for _, obj in ipairs(building:GetDescendants()) do
-        if obj:IsA("BasePart") then
-            lines[#lines + 1] = exportPart(obj, rootCFrame)
-        end
-    end
-
-    return table.concat(lines, "\n")
-end
-
-local buildings = {}
-
-for _, building in ipairs(Structures:GetChildren()) do
-    local config = building:FindFirstChild("Config")
+for _, trait in ipairs(Traits:GetChildren()) do
+    local config = trait:FindFirstChild("Config")
 
     if config and config:IsA("ModuleScript") then
         local ok, data = pcall(require, config)
 
-        if ok
-            and type(data) == "table"
-            and data.BuildingCategory ~= "Decoration"
-        then
-            local exported = exportBuilding(building)
+        if ok and type(data) == "table" then
+            local lines = {}
 
-            -- only keep buildings that actually contain parts
-            if exported:find("\n", 1, true) then
-                buildings[#buildings + 1] = exported
+            table.insert(lines, "trait: " .. trait.Name)
+            table.insert(lines, "rarity: " .. tostring(data.Rarity or "none"))
+            table.insert(lines, "description: " .. tostring(data.Description or "none"))
+
+            if data.ResourceProduction then
+                local rp = data.ResourceProduction
+
+                for name, value in pairs(rp.Multipliers or {}) do
+                    if not string.find(string.lower(name), "essence") then
+                        table.insert(lines, name .. ": " .. tostring(value))
+                    end
+                end
+
+                for name, value in pairs(rp.Modifiers or {}) do
+                    if not string.find(string.lower(name), "essence") then
+                        table.insert(lines, name .. ": " .. tostring(value))
+                    end
+                end
             end
+
+            if data.Unit then
+                for name, value in pairs(data.Unit.Multipliers or {}) do
+                    table.insert(lines, "unit " .. name .. ": " .. tostring(value))
+                end
+
+                for name, value in pairs(data.Unit.Modifiers or {}) do
+                    table.insert(lines, "unit " .. name .. ": " .. tostring(value))
+                end
+            end
+
+            if data.Appearance and data.Appearance.Size then
+                table.insert(lines, "size: " .. tostring(data.Appearance.Size))
+            end
+
+            if data.Bounty and data.Bounty.Money then
+                table.insert(lines, "bounty money: " .. tostring(data.Bounty.Money))
+            end
+
+            table.insert(output, table.concat(lines, "\n"))
         end
     end
 end
 
-print("exporting " .. #buildings .. " buildings")
-
-local function sendFile(content, filename)
-    local boundary =
-        "----Delta" .. tostring(math.random(100000, 999999))
-
-    local body =
-        "--" .. boundary .. "\r\n"
-        .. 'Content-Disposition: form-data; name="file"; filename="'
-        .. filename
-        .. '"\r\n'
-        .. "Content-Type: text/plain\r\n\r\n"
-        .. content
-        .. "\r\n--"
-        .. boundary
-        .. "--\r\n"
-
-    return request({
-        Url = WEBHOOK,
-        Method = "POST",
-
-        Headers = {
-            ["Content-Type"] =
-                "multipart/form-data; boundary=" .. boundary
-        },
-
-        Body = body
-    })
-end
-
-local total = math.ceil(#buildings / BATCH_SIZE)
-
-if writefile and not isfolder("Buildings") then
-    makefolder("Buildings")
-end
-
-for batch = 1, total do
-    local start = (batch - 1) * BATCH_SIZE + 1
-    local finish = math.min(batch * BATCH_SIZE, #buildings)
-
-    local content = ""
-
-    for i = start, finish do
-        content = content .. buildings[i] .. "\n\n"
-    end
-
-    local filename =
-        string.format(
-            "Buildings_%02d_of_%02d.txt",
-            batch,
-            total
-        )
-
-    if writefile then
-        writefile(
-            "Buildings/" .. filename,
-            content
-        )
-    end
-
-    local ok, response = pcall(function()
-        return sendFile(content, filename)
-    end)
-
-    print(
-        "batch "
-        .. batch
-        .. "/"
-        .. total
-        .. " | buildings "
-        .. start
-        .. "-"
-        .. finish
-        .. " | "
-        .. #content
-        .. " chars"
-    )
-
-    if not ok then
-        warn("webhook failed:", response)
-    end
-
-    if batch < total then
-        task.wait(WAIT_TIME)
-    end
-end
-
-print("done")
+setclipboard(table.concat(output, "\n\n--------------------\n\n"))
+print("copied " .. #output .. " traits to clipboard")
