@@ -3,28 +3,37 @@ local WEBHOOK = "https://discord.com/api/webhooks/1529331358030106634/BgNcGV0x4t
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Structures = ReplicatedStorage.Shared.Resources.PlotResources.Structures
 
+local BATCH_SIZE = 50
+
 local function serialize(v)
     if typeof(v) == "Vector3" then
         return string.format("Vector3(%.3f, %.3f, %.3f)", v.X, v.Y, v.Z)
+
     elseif typeof(v) == "CFrame" then
-        local x,y,z = v.Position.X, v.Position.Y, v.Position.Z
-        return string.format("CFrame(%.3f, %.3f, %.3f)", x, y, z)
+        local p = v.Position
+        return string.format("CFrame(%.3f, %.3f, %.3f)", p.X, p.Y, p.Z)
+
     elseif typeof(v) == "Color3" then
         return string.format("Color3(%.3f, %.3f, %.3f)", v.R, v.G, v.B)
-    elseif typeof(v) == "BrickColor" then
-        return tostring(v)
+
     elseif typeof(v) == "EnumItem" then
         return tostring(v)
+
     elseif typeof(v) == "Instance" then
         return v:GetFullName()
+
     elseif type(v) == "table" then
         local t = {}
-        for k,x in pairs(v) do
-            t[#t+1] = tostring(k) .. "=" .. serialize(x)
+
+        for k, x in pairs(v) do
+            t[#t + 1] = tostring(k) .. "=" .. serialize(x)
         end
+
         return "{" .. table.concat(t, ", ") .. "}"
+
     elseif type(v) == "string" then
         return '"' .. v:gsub('"', '\\"') .. '"'
+
     else
         return tostring(v)
     end
@@ -33,7 +42,7 @@ end
 local function getProperties(obj)
     local lines = {}
 
-    local properties = {
+    for _, property in ipairs({
         "Size",
         "Position",
         "CFrame",
@@ -51,9 +60,7 @@ local function getProperties(obj)
         "MeshSize",
         "Shape",
         "CastShadow"
-    }
-
-    for _, property in ipairs(properties) do
+    }) do
         local ok, value = pcall(function()
             return obj[property]
         end)
@@ -66,27 +73,27 @@ local function getProperties(obj)
     return lines
 end
 
-local function dumpModel(model)
+local function dumpBuilding(building)
     local lines = {}
 
-    lines[#lines + 1] = "=== " .. model.Name .. " ==="
-    lines[#lines + 1] = ""
-    lines[#lines + 1] = "[MODEL]"
-    lines[#lines + 1] = "Name=" .. model.Name
-    lines[#lines + 1] = "ClassName=" .. model.ClassName
+    lines[#lines + 1] = "=================================================="
+    lines[#lines + 1] = "BUILDING: " .. building.Name
+    lines[#lines + 1] = "=================================================="
     lines[#lines + 1] = ""
 
-    for _, obj in ipairs(model:GetDescendants()) do
-        if obj:IsA("BasePart") or obj:IsA("MeshPart") then
+    for _, obj in ipairs(building:GetDescendants()) do
+
+        if obj:IsA("BasePart") then
             lines[#lines + 1] = "[PART]"
             lines[#lines + 1] = "Name=" .. obj.Name
             lines[#lines + 1] = "ClassName=" .. obj.ClassName
 
-            for _, line in ipairs(getProperties(obj)) do
-                lines[#lines + 1] = line
+            for _, property in ipairs(getProperties(obj)) do
+                lines[#lines + 1] = property
             end
 
             lines[#lines + 1] = ""
+
         elseif obj:IsA("Model") or obj:IsA("Folder") then
             lines[#lines + 1] = "[OBJECT]"
             lines[#lines + 1] = "Name=" .. obj.Name
@@ -95,7 +102,8 @@ local function dumpModel(model)
         end
     end
 
-    lines[#lines + 1] = "=== END ==="
+    lines[#lines + 1] = "END BUILDING"
+    lines[#lines + 1] = ""
 
     return table.concat(lines, "\n")
 end
@@ -104,7 +112,7 @@ local function safeName(name)
     return name:gsub('[\\/:*?"<>|]', "_")
 end
 
-local files = {}
+local buildings = {}
 
 for _, building in ipairs(Structures:GetChildren()) do
     local config = building:FindFirstChild("Config")
@@ -116,53 +124,126 @@ for _, building in ipairs(Structures:GetChildren()) do
             and type(data) == "table"
             and data.BuildingCategory ~= "Decoration"
         then
-            local content = dumpModel(building)
-            local filename = safeName(building.Name) .. ".txt"
-
-            if writefile then
-                writefile("Buildings/" .. filename, content)
-            end
-
-            files[#files + 1] = {
-                name = filename,
-                content = content
+            buildings[#buildings + 1] = {
+                name = building.Name,
+                content = dumpBuilding(building)
             }
         end
     end
 end
 
+print("found " .. #buildings .. " buildings")
+
+local function sendBatch(batch, batchNumber, totalBatches)
+
+    local filename = string.format(
+        "Buildings_%02d_of_%02d.txt",
+        batchNumber,
+        totalBatches
+    )
+
+    local content = ""
+
+    content = content
+        .. "BUILDING EXPORT\n"
+        .. "BATCH " .. batchNumber .. "/" .. totalBatches .. "\n"
+        .. "BUILDINGS: " .. #batch .. "\n\n"
+
+    for _, building in ipairs(batch) do
+        content = content .. building.content
+    end
+
+    if writefile then
+        if not isfolder("Buildings") then
+            makefolder("Buildings")
+        end
+
+        writefile(
+            "Buildings/" .. filename,
+            content
+        )
+    end
+
+    local boundary =
+        "----DeltaBuildingExport"
+        .. tostring(math.random(100000, 999999))
+
+    local body = ""
+
+    body = body
+        .. "--" .. boundary .. "\r\n"
+        .. 'Content-Disposition: form-data; name="content"'
+        .. "\r\n\r\n"
+        .. "building export " .. batchNumber .. "/" .. totalBatches
+        .. "\r\n"
+
+    body = body
+        .. "--" .. boundary .. "\r\n"
+        .. 'Content-Disposition: form-data; name="file"; filename="'
+        .. filename
+        .. '"\r\n'
+        .. "Content-Type: text/plain\r\n\r\n"
+        .. content
+        .. "\r\n"
+        .. "--" .. boundary .. "--\r\n"
+
+    local response = request({
+        Url = WEBHOOK,
+        Method = "POST",
+        Headers = {
+            ["Content-Type"] =
+                "multipart/form-data; boundary=" .. boundary
+        },
+        Body = body
+    })
+
+    print(
+        "sent batch "
+        .. batchNumber
+        .. "/"
+        .. totalBatches
+        .. " - "
+        .. #batch
+        .. " buildings"
+    )
+
+    return response
+end
+
 if WEBHOOK == "PUTHERE" or WEBHOOK == "" then
-    warn("put your discord webhook into WEBHOOK first")
+    warn("put your discord webhook into WEBHOOK")
     return
 end
 
-local boundary = "----DeltaBuildingExport" .. tostring(math.random(100000, 999999))
-local body = ""
+local totalBatches = math.ceil(#buildings / BATCH_SIZE)
 
-body = body
-    .. "--" .. boundary .. "\r\n"
-    .. 'Content-Disposition: form-data; name="content"' .. "\r\n\r\n"
-    .. "building export\r\n"
+for batchNumber = 1, totalBatches do
 
-for _, file in ipairs(files) do
-    body = body
-        .. "--" .. boundary .. "\r\n"
-        .. 'Content-Disposition: form-data; name="file"; filename="' .. file.name .. '"\r\n'
-        .. "Content-Type: text/plain\r\n\r\n"
-        .. file.content
-        .. "\r\n"
+    local batch = {}
+
+    local first = ((batchNumber - 1) * BATCH_SIZE) + 1
+    local last = math.min(
+        batchNumber * BATCH_SIZE,
+        #buildings
+    )
+
+    for i = first, last do
+        batch[#batch + 1] = buildings[i]
+    end
+
+    sendBatch(
+        batch,
+        batchNumber,
+        totalBatches
+    )
+
+    task.wait(2)
 end
 
-body = body .. "--" .. boundary .. "--\r\n"
-
-local response = request({
-    Url = WEBHOOK,
-    Method = "POST",
-    Headers = {
-        ["Content-Type"] = "multipart/form-data; boundary=" .. boundary
-    },
-    Body = body
-})
-
-print("exported " .. #files .. " buildings")
-print("discord response:", response.StatusCode)
+print(
+    "DONE - "
+    .. #buildings
+    .. " buildings in "
+    .. totalBatches
+    .. " files"
+)
