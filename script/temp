@@ -1,0 +1,168 @@
+local WEBHOOK = "https://discord.com/api/webhooks/1529331358030106634/BgNcGV0x4t-qDE__u9Z-jAEdfQ7cpGogadEOe7JK4GR5cT80Lp0gaGv1qrTkBtUJM2jh"
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Structures = ReplicatedStorage.Shared.Resources.PlotResources.Structures
+
+local function serialize(v)
+    if typeof(v) == "Vector3" then
+        return string.format("Vector3(%.3f, %.3f, %.3f)", v.X, v.Y, v.Z)
+    elseif typeof(v) == "CFrame" then
+        local x,y,z = v.Position.X, v.Position.Y, v.Position.Z
+        return string.format("CFrame(%.3f, %.3f, %.3f)", x, y, z)
+    elseif typeof(v) == "Color3" then
+        return string.format("Color3(%.3f, %.3f, %.3f)", v.R, v.G, v.B)
+    elseif typeof(v) == "BrickColor" then
+        return tostring(v)
+    elseif typeof(v) == "EnumItem" then
+        return tostring(v)
+    elseif typeof(v) == "Instance" then
+        return v:GetFullName()
+    elseif type(v) == "table" then
+        local t = {}
+        for k,x in pairs(v) do
+            t[#t+1] = tostring(k) .. "=" .. serialize(x)
+        end
+        return "{" .. table.concat(t, ", ") .. "}"
+    elseif type(v) == "string" then
+        return '"' .. v:gsub('"', '\\"') .. '"'
+    else
+        return tostring(v)
+    end
+end
+
+local function getProperties(obj)
+    local lines = {}
+
+    local properties = {
+        "Size",
+        "Position",
+        "CFrame",
+        "Color",
+        "Material",
+        "Transparency",
+        "Reflectance",
+        "Anchored",
+        "CanCollide",
+        "CanTouch",
+        "CanQuery",
+        "MeshId",
+        "TextureID",
+        "TextureId",
+        "MeshSize",
+        "Shape",
+        "CastShadow"
+    }
+
+    for _, property in ipairs(properties) do
+        local ok, value = pcall(function()
+            return obj[property]
+        end)
+
+        if ok and value ~= nil then
+            lines[#lines + 1] = property .. "=" .. serialize(value)
+        end
+    end
+
+    return lines
+end
+
+local function dumpModel(model)
+    local lines = {}
+
+    lines[#lines + 1] = "=== " .. model.Name .. " ==="
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "[MODEL]"
+    lines[#lines + 1] = "Name=" .. model.Name
+    lines[#lines + 1] = "ClassName=" .. model.ClassName
+    lines[#lines + 1] = ""
+
+    for _, obj in ipairs(model:GetDescendants()) do
+        if obj:IsA("BasePart") or obj:IsA("MeshPart") then
+            lines[#lines + 1] = "[PART]"
+            lines[#lines + 1] = "Name=" .. obj.Name
+            lines[#lines + 1] = "ClassName=" .. obj.ClassName
+
+            for _, line in ipairs(getProperties(obj)) do
+                lines[#lines + 1] = line
+            end
+
+            lines[#lines + 1] = ""
+        elseif obj:IsA("Model") or obj:IsA("Folder") then
+            lines[#lines + 1] = "[OBJECT]"
+            lines[#lines + 1] = "Name=" .. obj.Name
+            lines[#lines + 1] = "ClassName=" .. obj.ClassName
+            lines[#lines + 1] = ""
+        end
+    end
+
+    lines[#lines + 1] = "=== END ==="
+
+    return table.concat(lines, "\n")
+end
+
+local function safeName(name)
+    return name:gsub('[\\/:*?"<>|]', "_")
+end
+
+local files = {}
+
+for _, building in ipairs(Structures:GetChildren()) do
+    local config = building:FindFirstChild("Config")
+
+    if config and config:IsA("ModuleScript") then
+        local ok, data = pcall(require, config)
+
+        if ok
+            and type(data) == "table"
+            and data.BuildingCategory ~= "Decoration"
+        then
+            local content = dumpModel(building)
+            local filename = safeName(building.Name) .. ".txt"
+
+            if writefile then
+                writefile("Buildings/" .. filename, content)
+            end
+
+            files[#files + 1] = {
+                name = filename,
+                content = content
+            }
+        end
+    end
+end
+
+if WEBHOOK == "PUTHERE" or WEBHOOK == "" then
+    warn("put your discord webhook into WEBHOOK first")
+    return
+end
+
+local boundary = "----DeltaBuildingExport" .. tostring(math.random(100000, 999999))
+local body = ""
+
+body = body
+    .. "--" .. boundary .. "\r\n"
+    .. 'Content-Disposition: form-data; name="content"' .. "\r\n\r\n"
+    .. "building export\r\n"
+
+for _, file in ipairs(files) do
+    body = body
+        .. "--" .. boundary .. "\r\n"
+        .. 'Content-Disposition: form-data; name="file"; filename="' .. file.name .. '"\r\n'
+        .. "Content-Type: text/plain\r\n\r\n"
+        .. file.content
+        .. "\r\n"
+end
+
+body = body .. "--" .. boundary .. "--\r\n"
+
+local response = request({
+    Url = WEBHOOK,
+    Method = "POST",
+    Headers = {
+        ["Content-Type"] = "multipart/form-data; boundary=" .. boundary
+    },
+    Body = body
+})
+
+print("exported " .. #files .. " buildings")
+print("discord response:", response.StatusCode)
