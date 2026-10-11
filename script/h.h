@@ -5,6 +5,9 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 local RS = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
+local RunService = game:GetService("RunService")
+local Lighting = game:GetService("Lighting")
+local VirtualUser = game:GetService("VirtualUser")
 
 local WEBHOOK_URL = "https://discord.com/api/webhooks/1549531330067439659/I6VTwhJRQFfU90pGgSojIlQZafbl3KEEkq-y6lT7TlBHC_XYX84VFNcipCq8OOKTnfjU"
 local httpRequest = request or http_request
@@ -28,6 +31,51 @@ local C_LBL  = Color3.fromRGB(230,230,230)
 
 local PurchaseRemote = RS:WaitForChild("Shared"):WaitForChild("Resources"):WaitForChild("VendorResources"):WaitForChild("Remotes"):WaitForChild("PurchaseStructure")
 
+-- ============================================================
+-- ANTI IDLE (from Infinite Yield)
+-- ============================================================
+LocalPlayer.Idled:Connect(function()
+    VirtualUser:CaptureController()
+    VirtualUser:ClickButton2(Vector2.new())
+end)
+
+-- ============================================================
+-- ANTI FOG (from Infinite Yield)
+-- ============================================================
+local antiFogEnabled = true
+task.spawn(function()
+    while true do
+        if antiFogEnabled then
+            pcall(function()
+                Lighting.FogEnd = 9e9
+                Lighting.FogStart = 9e9
+            end)
+        end
+        task.wait(1)
+    end
+end)
+
+-- ============================================================
+-- ANTI LAG (from Infinite Yield) - lowest quality level
+-- ============================================================
+pcall(function()
+    settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+end)
+
+-- ============================================================
+-- NO RENDER (from Infinite Yield) - toggle with X key
+-- ============================================================
+local renderEnabled = true
+local function setRender(enabled)
+    renderEnabled = enabled
+    pcall(function()
+        RunService:Set3dRenderingEnabled(enabled)
+    end)
+end
+
+-- ============================================================
+-- WORKSPACE CLEANUP
+-- ============================================================
 local function cleanupWorkspace()
     pcall(function()
         local t = Workspace:FindFirstChild("Terrain")
@@ -66,11 +114,17 @@ local function cleanupWorkspace()
     end)
 end
 
+-- ============================================================
+-- CONSOLE
+-- ============================================================
 local consoleLines={"","",""}
 local consoleLabels={}
 local function updateConsole() for i=1,3 do if consoleLabels[i] then consoleLabels[i].Text=consoleLines[i] end end end
 local function logConsole(m) table.remove(consoleLines,1) table.insert(consoleLines,m) updateConsole() end
 
+-- ============================================================
+-- MAIN GUI
+-- ============================================================
 local screenGui=Instance.new("ScreenGui")
 screenGui.Name="A"
 screenGui.ResetOnSpawn=false
@@ -183,11 +237,12 @@ local function createToggle(t,k,x)
             b.BorderColor3=C_DARK
         end
     end)
+    return b
 end
 
-createToggle("M","m",0)
-createToggle("B","b",0.333)
-createToggle("C","c",0.666)
+local mBtn = createToggle("M","m",0)
+local bBtn = createToggle("B","b",0.333)
+local cBtn = createToggle("C","c",0.666)
 
 local statsLabel=Instance.new("TextLabel")
 statsLabel.Size=UDim2.new(1,-8,0,13)
@@ -211,6 +266,176 @@ end)
 
 closeBtn.MouseButton1Click:Connect(function() screenGui:Destroy() end)
 
+-- ============================================================
+-- CONFIG TAB (auto-load, auto-run settings)
+-- ============================================================
+local configGui=Instance.new("ScreenGui")
+configGui.Name="ConfigGui"
+configGui.ResetOnSpawn=false
+configGui.Enabled=false
+configGui.Parent=PlayerGui
+
+local configFrame=Instance.new("Frame")
+configFrame.Size=UDim2.new(0,180,0,140)
+configFrame.Position=UDim2.new(0,190,0.5,-70)
+configFrame.BackgroundColor3=C_WIN
+configFrame.BorderSizePixel=0
+configFrame.Active=true
+configFrame.Draggable=true
+configFrame.Parent=configGui
+
+local configTitle=Instance.new("Frame")
+configTitle.Size=UDim2.new(1,0,0,TITLE_H)
+configTitle.BackgroundColor3=C_WIN
+configTitle.BorderSizePixel=0
+configTitle.Parent=configFrame
+
+local configTitleLabel=Instance.new("TextLabel")
+configTitleLabel.Size=UDim2.new(1,-22,1,0)
+configTitleLabel.Position=UDim2.new(0,22,0,0)
+configTitleLabel.BackgroundTransparency=1
+configTitleLabel.Text="Config"
+configTitleLabel.TextColor3=Color3.new(0,0,0)
+configTitleLabel.TextSize=11
+configTitleLabel.Font=Enum.Font.Code
+configTitleLabel.Parent=configTitle
+
+local configClose=Instance.new("TextButton")
+configClose.Size=UDim2.new(0,16,0,14)
+configClose.Position=UDim2.new(1,-17,0,2)
+configClose.BackgroundColor3=C_WIN
+configClose.BorderSizePixel=1
+configClose.BorderColor3=C_DARK
+configClose.Text="X"
+configClose.TextColor3=Color3.new(0,0,0)
+configClose.TextSize=11
+configClose.Font=Enum.Font.Code
+configClose.Parent=configTitle
+configClose.MouseButton1Click:Connect(function() configGui.Enabled=false end)
+
+local configBody=Instance.new("Frame")
+configBody.Size=UDim2.new(1,0,1,-TITLE_H)
+configBody.Position=UDim2.new(0,0,0,TITLE_H)
+configBody.BackgroundTransparency=1
+configBody.Parent=configFrame
+
+-- config states
+local configStates = {
+    autoLoad = false,
+    autoRun = false,
+    antiIdle = true,
+    noRender = false,
+    antiFog = true,
+    antiLag = true,
+}
+
+local configButtons = {}
+
+local function createConfigToggle(label, key, y)
+    local lbl=Instance.new("TextLabel")
+    lbl.Size=UDim2.new(0.6,-4,0,16)
+    lbl.Position=UDim2.new(0,4,0,y)
+    lbl.BackgroundTransparency=1
+    lbl.Text=label
+    lbl.TextColor3=Color3.new(0,0,0)
+    lbl.TextSize=11
+    lbl.Font=Enum.Font.Code
+    lbl.TextXAlignment=Enum.TextXAlignment.Left
+    lbl.Parent=configBody
+
+    local btn=Instance.new("TextButton")
+    btn.Size=UDim2.new(0.35,-4,0,16)
+    btn.Position=UDim2.new(0.6,2,0,y)
+    btn.BackgroundColor3=C_WIN
+    btn.BorderSizePixel=1
+    btn.BorderColor3=C_DARK
+    btn.Text=configStates[key] and "ON" or "OFF"
+    btn.TextColor3=Color3.new(0,0,0)
+    btn.TextSize=11
+    btn.Font=Enum.Font.Code
+    btn.Parent=configBody
+
+    btn.MouseButton1Click:Connect(function()
+        configStates[key]=not configStates[key]
+        btn.Text=configStates[key] and "ON" or "OFF"
+        if configStates[key] then
+            btn.BackgroundColor3=Color3.new(1,1,1)
+            btn.BorderColor3=Color3.new(0,0,0)
+        else
+            btn.BackgroundColor3=C_WIN
+            btn.BorderColor3=C_DARK
+        end
+
+        -- apply immediately
+        if key=="antiIdle" then
+            -- handled by connection, always on for now
+        elseif key=="noRender" then
+            setRender(not configStates.noRender)
+        elseif key=="antiFog" then
+            antiFogEnabled = configStates.antiFog
+        elseif key=="antiLag" then
+            if configStates.antiLag then
+                pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end)
+            end
+        end
+    end)
+
+    configButtons[key]=btn
+    return btn
+end
+
+createConfigToggle("Auto Load", "autoLoad", 4)
+createConfigToggle("Auto Run", "autoRun", 24)
+createConfigToggle("Anti Idle", "antiIdle", 44)
+createConfigToggle("No Render", "noRender", 64)
+createConfigToggle("Anti Fog", "antiFog", 84)
+createConfigToggle("Anti Lag", "antiLag", 104)
+
+-- config button on main GUI
+local configBtn=Instance.new("TextButton")
+configBtn.Size=UDim2.new(0,30,0,14)
+configBtn.Position=UDim2.new(0,4,0,2)
+configBtn.BackgroundColor3=C_WIN
+configBtn.BorderSizePixel=1
+configBtn.BorderColor3=C_DARK
+configBtn.Text="CFG"
+configBtn.TextColor3=Color3.new(0,0,0)
+configBtn.TextSize=10
+configBtn.Font=Enum.Font.Code
+configBtn.Parent=titleBar
+configBtn.MouseButton1Click:Connect(function()
+    configGui.Enabled = not configGui.Enabled
+end)
+
+-- ============================================================
+-- AUTO RUN - turn all on + 3fps
+-- ============================================================
+local function setToggleVisual(btn, on)
+    if on then
+        btn.BackgroundColor3=Color3.new(1,1,1)
+        btn.BorderColor3=Color3.new(0,0,0)
+    else
+        btn.BackgroundColor3=C_WIN
+        btn.BorderColor3=C_DARK
+    end
+end
+
+local function applyAutoRun()
+    states.m = true
+    states.b = true
+    states.c = true
+    setToggleVisual(mBtn, true)
+    setToggleVisual(bBtn, true)
+    setToggleVisual(cBtn, true)
+    if setfpscap then setfpscap(3) end
+    setRender(false)
+    logConsole("Auto run ON - 3fps")
+    sendWebhook("Auto run activated ("..os.date("%x %X")..")")
+end
+
+-- ============================================================
+-- MOVEMENT / TP
+-- ============================================================
 local function getRoot() local c=LocalPlayer.Character return c and c:FindFirstChild("HumanoidRootPart") end
 
 local function autoJump()
@@ -239,6 +464,9 @@ local function firePrompt(p)
     pcall(function() if p and p.Parent then p:InputHoldBegin() task.wait(0.1) p:InputHoldEnd() end end)
 end
 
+-- ============================================================
+-- SHOP SCANNER
+-- ============================================================
 local shopCategories={"units","decoration","production","special"}
 local buying=false
 
@@ -280,6 +508,9 @@ local function scanShop()
     end
 end
 
+-- ============================================================
+-- CAPTURE POINTS / BOSS HUNT
+-- ============================================================
 local capturePoints={
     {name="Center",air=nil,ground=nil,naval=nil},
     {name="1",air=nil,ground=nil,naval=nil},
@@ -383,6 +614,32 @@ local function cleanActiveUnits()
     updateStats()
 end
 
+-- ============================================================
+-- KEYBINDS (1s polling, optimized)
+-- ============================================================
+local UserInputService = game:GetService("UserInputService")
+
+task.spawn(function()
+    while screenGui.Parent do
+        if UserInputService:IsKeyDown(Enum.KeyCode.X) then
+            setRender(true)
+            logConsole("Render ON")
+            task.wait(1)
+        elseif UserInputService:IsKeyDown(Enum.KeyCode.C) then
+            local r = getRoot()
+            if r then
+                r.CFrame = CFrame.new(86, 5, -26)
+                logConsole("TP to 86,5,-26")
+            end
+            task.wait(1)
+        end
+        task.wait(0.1)
+    end
+end)
+
+-- ============================================================
+-- MAIN LOOPS
+-- ============================================================
 initCapturePoints()
 cleanupWorkspace()
 logConsole("Ready")
@@ -390,6 +647,16 @@ logConsole("Ready")
 task.spawn(function() while screenGui.Parent do if states.m then pcall(scanShop) end task.wait(CONFIG.REFRESH_RATE) end end)
 task.spawn(function() while screenGui.Parent do if states.b then pcall(huntBoss) end task.wait(CONFIG.REFRESH_RATE) end end)
 task.spawn(function() while screenGui.Parent do if states.c then pcall(cleanActiveUnits) end task.wait(CONFIG.CLEAN_INTERVAL) end end)
+
+-- auto run check loop
+task.spawn(function()
+    while screenGui.Parent do
+        task.wait(1)
+        if configStates.autoRun and not states.m then
+            applyAutoRun()
+        end
+    end
+end)
 
 task.spawn(function()
     while screenGui.Parent do
@@ -422,6 +689,9 @@ end
 for _, p in ipairs(Players:GetPlayers()) do hookPlayer(p) end
 Players.PlayerAdded:Connect(hookPlayer)
 
+-- ============================================================
+-- FPS CAP TOGGLE
+-- ============================================================
 local s={3,5,10,60}
 local i=1
 local g=gethui()
@@ -446,85 +716,130 @@ b.MouseButton1Click:Connect(function()
     b.Text=f~=60 and "FPS: "..f or "FPS: OFF"
 end)
 
+-- ============================================================
+-- INVENTORY WATCHER
+-- ============================================================
 task.spawn(function()
-    local inventoryUI = PlayerGui:WaitForChild("inventoryUI")
-    local main = inventoryUI:WaitForChild("main")
-    local inventoryFrame = main:WaitForChild("inventoryFrame")
+    local ok, err = pcall(function()
+        local inventoryUI = PlayerGui:WaitForChild("inventoryUI")
+        local main = inventoryUI:WaitForChild("main")
+        local inventoryFrame = main:WaitForChild("inventoryFrame")
 
-    local lists = {
-        inventoryFrame:WaitForChild("production"),
-        inventoryFrame:WaitForChild("decoration"),
-        inventoryFrame:WaitForChild("special"),
-        inventoryFrame:WaitForChild("units")
-    }
+        local lists = {
+            inventoryFrame:WaitForChild("production"),
+            inventoryFrame:WaitForChild("decoration"),
+            inventoryFrame:WaitForChild("special"),
+            inventoryFrame:WaitForChild("units")
+        }
 
-    local seen = {}
-
-    -- give the inventory time to finish loading
-    task.wait(3)
-
-    -- store everything that already exists
-    for _, list in ipairs(lists) do
-        for _, obj in ipairs(list:GetChildren()) do
-            if obj:IsA("Frame")
-                and obj.Name ~= "TEMPLATE"
-                and obj.Name ~= "spacer" then
-
-                seen[obj.Name] = true
-            end
-        end
-    end
-
-    print("inventory initial scan complete")
-
-    -- only report things that appear after the initial scan
-    while screenGui.Parent do
-        task.wait(1)
+        local seen = {}
+        task.wait(3)
 
         for _, list in ipairs(lists) do
             for _, obj in ipairs(list:GetChildren()) do
                 if obj:IsA("Frame")
                     and obj.Name ~= "TEMPLATE"
-                    and obj.Name ~= "spacer"
-                    and not seen[obj.Name] then
-
+                    and obj.Name ~= "spacer" then
                     seen[obj.Name] = true
-
-                    print("NEW ITEM:", obj.Name)
-                    sendWebhook("new item: " .. obj.Name)
                 end
             end
         end
-    end
+
+        print("inventory initial scan complete")
+
+        while screenGui.Parent do
+            task.wait(1)
+            for _, list in ipairs(lists) do
+                for _, obj in ipairs(list:GetChildren()) do
+                    if obj:IsA("Frame")
+                        and obj.Name ~= "TEMPLATE"
+                        and obj.Name ~= "spacer"
+                        and not seen[obj.Name] then
+                        seen[obj.Name] = true
+                        print("NEW ITEM:", obj.Name)
+                        sendWebhook("new item: " .. obj.Name)
+                    end
+                end
+            end
+        end
+    end)
+    if not ok then warn("inventory watcher error:", err) end
 end)
 
+-- ============================================================
+-- CRATE WATCHER (FIXED)
+-- ============================================================
 task.spawn(function()
-    local crateList = workspace.Components.ControlPoints.Center.Model.capturePointUI.main.rewardFrame.crateList
-    local countdown = workspace.Components.ControlPoints.Center.Model.capturePointUI.main.rewardFrame.countdown
+    task.wait(2)
+
+    local rewardFrame = nil
+    local ok, err = pcall(function()
+        rewardFrame = workspace.Components.ControlPoints.Center.Model.capturePointUI.main.rewardFrame
+    end)
+    if not ok or not rewardFrame then
+        warn("crate watcher: rewardFrame not found:", err)
+        return
+    end
+
+    local crateList = rewardFrame:FindFirstChild("crateList")
+    local countdown = rewardFrame:FindFirstChild("countdown")
+
+    if not crateList then
+        warn("crate watcher: crateList not found")
+        return
+    end
+    if not countdown then
+        warn("crate watcher: countdown not found")
+        return
+    end
 
     local lastCrate = nil
     local lastTime = nil
 
-    while task.wait(5) do
+    logConsole("Crate watcher ready")
+
+    while screenGui.Parent do
+        task.wait(5)
+
         local currentCrate = nil
 
+        -- check all possible crate frames
         for _, name in ipairs({"eliteCrate", "premiumCrate", "standardCrate"}) do
             local crate = crateList:FindFirstChild(name)
+            if crate then
+                -- check multiple visibility indicators
+                local isVisible = false
+                pcall(function()
+                    if crate.Visible then isVisible = true end
+                end)
+                pcall(function()
+                    if crate.BackgroundTransparency < 1 then isVisible = true end
+                end)
+                -- check if it has any visible children (icons etc)
+                pcall(function()
+                    for _, child in ipairs(crate:GetChildren()) do
+                        if child:IsA("GuiObject") and child.Visible then
+                            isVisible = true
+                            break
+                        end
+                    end
+                end)
 
-            if crate and crate.Visible then
-                currentCrate = name
-                break
+                if isVisible then
+                    currentCrate = name
+                    break
+                end
             end
         end
 
+        -- parse countdown
         local minutes, seconds = countdown.Text:match("(%d+):(%d+)")
         local currentTime = nil
-
         if minutes and seconds then
             currentTime = tonumber(minutes) * 60 + tonumber(seconds)
         end
 
-        -- timer went back up = new 5 minute cycle
+        -- timer went back up = new cycle
         if lastTime and currentTime and currentTime > lastTime then
             lastCrate = nil
         end
@@ -532,9 +847,8 @@ task.spawn(function()
         -- premium crate detected
         if currentCrate == "premiumCrate" and currentCrate ~= lastCrate then
             print("GOT PREMIUM CRATE")
-
             sendWebhook("🎁 premium crate detected!")
-
+            logConsole("PREMIUM CRATE!")
             lastCrate = currentCrate
         elseif currentCrate and currentCrate ~= lastCrate then
             lastCrate = currentCrate
@@ -543,3 +857,18 @@ task.spawn(function()
         lastTime = currentTime
     end
 end)
+
+-- ============================================================
+-- AUTO LOAD - queue_on_teleport for world hop (10s delay)
+-- ============================================================
+if configStates.autoLoad then
+    pcall(function()
+        if queue_on_teleport then
+            queue_on_teleport([[
+                task.wait(10)
+                loadstring(game:HttpGet("https://raw.githubusercontent.com/bericest-maker/script/refs/heads/main/script/h.h"))()
+            ]])
+            logConsole("Auto-load queued")
+        end
+    end)
+end
