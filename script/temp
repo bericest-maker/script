@@ -5,7 +5,7 @@ local LP = Players.LocalPlayer
 
 local POOLS = {
 Buildings = {
-Common = {"CorridorCorner","SlowTrap","SpikeTrap","StoneWall","Torch","WoodFloor","WoodWall","StoneCorridor"},
+Common = {"CorridorCorner","SlowTrap","SpikeTrap","StoneWall","Torch","WoodFloor","WoodWall","YellowCorridor"},
 Uncommon = {"ArrowTrap","BearTrap","CorridorEnd","CorridorT","Crossroads","CurvedWall","SpikedBarricade","TrapRoom","TreasureRoom","WoodDoor"},
 Rare = {"Armory","ArrowTower","DragonNest","FireTrap","IronGate","LifeSpring","MonsterDen","OilTrap","PotionShop"},
 Epic = {"FrostObelisk","Graveyard","PoisonTrap","SawTrap","WarShrine"},
@@ -328,7 +328,7 @@ return s
 end
 
 local main = Instance.new("Frame")
-main.Size = UDim2.fromOffset(100, 130)
+main.Size = UDim2.fromOffset(300, 390)
 main.Position = UDim2.new(0, 40, 0.5, -195)
 main.BackgroundColor3 = Color3.fromRGB(16, 17, 24)
 main.BorderSizePixel = 0
@@ -338,7 +338,7 @@ corner(main, 8)
 stroke(main, Color3.fromRGB(55, 58, 80))
 
 local bar = Instance.new("Frame")
-bar.Size = UDim2.new(1, 0, 0, 9)
+bar.Size = UDim2.new(1, 0, 0, 26)
 bar.BackgroundColor3 = Color3.fromRGB(24, 26, 36)
 bar.BorderSizePixel = 0
 bar.Parent = main
@@ -349,7 +349,7 @@ title.Size = UDim2.new(1, -60, 1, 0)
 title.Position = UDim2.fromOffset(10, 0)
 title.BackgroundTransparency = 1
 title.Font = Enum.Font.GothamBold
-title.TextSize = 4
+title.TextSize = 12
 title.TextXAlignment = Enum.TextXAlignment.Left
 title.TextColor3 = Color3.fromRGB(230, 232, 245)
 title.Text = "R"
@@ -391,7 +391,7 @@ f.Size = UDim2.new(1, 0, 0, 18)
 f.BackgroundColor3 = Color3.fromRGB(26, 28, 40)
 f.BorderSizePixel = 0
 f.Font = Enum.Font.GothamBold
-f.TextSize = 4
+f.TextSize = 11
 f.TextColor3 = col or Color3.fromRGB(150, 155, 180)
 f.Text = "  " .. text
 f.TextXAlignment = Enum.TextXAlignment.Left
@@ -403,7 +403,7 @@ end
 
 local function toggle(text, default, callback, indent, color)
 local b = Instance.new("TextButton")
-b.Size = UDim2.new(1, 0, 0, 7)
+b.Size = UDim2.new(1, 0, 0, 20)
 b.BackgroundColor3 = Color3.fromRGB(22, 24, 33)
 b.BorderSizePixel = 0
 b.AutoButtonColor = false
@@ -417,7 +417,7 @@ lbl.Size = UDim2.new(1, -34 - (indent or 0), 1, 0)
 lbl.Position = UDim2.fromOffset(8 + (indent or 0), 0)
 lbl.BackgroundTransparency = 1
 lbl.Font = Enum.Font.Gotham
-lbl.TextSize = 4
+lbl.TextSize = 11
 lbl.TextXAlignment = Enum.TextXAlignment.Left
 lbl.TextColor3 = color or Color3.fromRGB(205, 208, 225)
 lbl.Text = text
@@ -473,7 +473,7 @@ lbl.Size = UDim2.new(1, -16, 0, 14)
 lbl.Position = UDim2.fromOffset(8, 1)
 lbl.BackgroundTransparency = 1
 lbl.Font = Enum.Font.Gotham
-lbl.TextSize = 3
+lbl.TextSize = 10
 lbl.TextXAlignment = Enum.TextXAlignment.Left
 lbl.TextColor3 = Color3.fromRGB(200, 203, 220)
 lbl.Text = text .. ": " .. tostring(default)
@@ -533,7 +533,7 @@ lbl.Size = UDim2.fromOffset(40, 24)
 lbl.Position = UDim2.fromOffset(8, 0)
 lbl.BackgroundTransparency = 1
 lbl.Font = Enum.Font.Gotham
-lbl.TextSize = 4
+lbl.TextSize = 11
 lbl.TextXAlignment = Enum.TextXAlignment.Left
 lbl.TextColor3 = Color3.fromRGB(200, 203, 220)
 lbl.Text = "Plot"
@@ -547,7 +547,7 @@ b.Position = UDim2.fromOffset(38 + (i - 1) * 30, 4)
 b.BackgroundColor3 = Color3.fromRGB(38, 41, 55)
 b.BorderSizePixel = 0
 b.Font = Enum.Font.GothamBold
-b.TextSize = 3
+b.TextSize = 10
 b.TextColor3 = Color3.fromRGB(215, 218, 235)
 b.Text = tostring(i)
 b.Parent = holder
@@ -629,28 +629,6 @@ end
 buildPool("Buildings")
 buildPool("Monsters")
 
--- auto-select all buildings
-CFG.Buildings = true
-
-for rarity, items in pairs(POOLS.Buildings) do
-    CFG.Rar.Buildings[rarity] = true
-
-    for _, item in ipairs(items) do
-        CFG.Want.Buildings[rarity][item] = true
-    end
-end
-
--- auto-select mythic, legendary, and secret monsters
-for _, rarity in ipairs({"Mythic", "Legendary", "Secret"}) do
-    CFG.Rar.Monsters[rarity] = true
-
-    for _, item in ipairs(POOLS.Monsters[rarity] or {}) do
-        CFG.Want.Monsters[rarity][item] = true
-    end
-end
-
-CFG.Monsters = true
-
 local spacer = Instance.new("Frame")
 spacer.Size = UDim2.new(1, 0, 0, 6)
 spacer.BackgroundTransparency = 1
@@ -671,52 +649,19 @@ if i.KeyCode == Enum.KeyCode.RightControl then main.Visible = not main.Visible e
 end)
 
 do
-    local dragging = false
-    local dragStart, startPos
-
-    local function isButton(obj)
-        return obj:IsA("GuiButton")
-    end
-
-    main.InputBegan:Connect(function(i)
-        if i.UserInputType ~= Enum.UserInputType.MouseButton1
-        and i.UserInputType ~= Enum.UserInputType.Touch then
-            return
-        end
-
-        local mousePos = i.Position
-        local objects = LP.PlayerGui:GetGuiObjectsAtPosition(
-            mousePos.X, mousePos.Y
-        )
-
-        for _, obj in ipairs(objects) do
-            if obj:IsA("GuiButton") then
-                return
-            end
-        end
-
-        dragging = true
-        dragStart = i.Position
-        startPos = main.Position
-    end)
-
-    UIS.InputChanged:Connect(function(i)
-        if dragging and (
-            i.UserInputType == Enum.UserInputType.MouseMovement
-            or i.UserInputType == Enum.UserInputType.Touch
-        ) then
-            local d = i.Position - dragStart
-            main.Position = UDim2.new(
-                startPos.X.Scale, startPos.X.Offset + d.X,
-                startPos.Y.Scale, startPos.Y.Offset + d.Y
-            )
-        end
-    end)
-
-    UIS.InputEnded:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1
-        or i.UserInputType == Enum.UserInputType.Touch then
-            dragging = false
-        end
-    end)
+local dragging, dragStart, startPos = false, nil, nil
+bar.InputBegan:Connect(function(i)
+if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+dragging = true dragStart = i.Position startPos = main.Position
+end
+end)
+UIS.InputChanged:Connect(function(i)
+if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+local d = i.Position - dragStart
+main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+end
+end)
+UIS.InputEnded:Connect(function(i)
+if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then dragging = false end
+end)
 end
