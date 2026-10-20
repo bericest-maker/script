@@ -11,6 +11,7 @@ local CFG = {
     ["FastBuy"] = true,
     ["AntiIdle"] = true,
     ["AutoFit"] = true,
+    ["GUIScale"] = 1,
     ["RollDelay"] = 1.5,
     ["TravelDelay"] = 0.05,
     ["PurchaseTimeout"] = 2,
@@ -66,33 +67,31 @@ local MUTATIONS = {{
 
 local ORDER = {"Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic", "Secret", "Divine"}
 local KINDS = {"Monsters", "Buildings"}
-local COLORS = {
-    Common = Color3.fromRGB(164, 175, 183),
-    Uncommon = Color3.fromRGB(147, 181, 142),
-    Rare = Color3.fromRGB(135, 171, 204),
-    Epic = Color3.fromRGB(180, 154, 203),
-    Legendary = Color3.fromRGB(212, 188, 131),
-    Mythic = Color3.fromRGB(209, 151, 156),
-    Secret = Color3.fromRGB(122, 187, 183),
-    Divine = Color3.fromRGB(221, 208, 161)
+local RARITY_COLOR = {
+    Common = Color3.fromRGB(160, 172, 188),
+    Uncommon = Color3.fromRGB(126, 196, 140),
+    Rare = Color3.fromRGB(112, 168, 224),
+    Epic = Color3.fromRGB(178, 140, 224),
+    Legendary = Color3.fromRGB(255, 179, 64),
+    Mythic = Color3.fromRGB(255, 122, 138),
+    Secret = Color3.fromRGB(99, 230, 176),
+    Divine = Color3.fromRGB(240, 224, 150)
 }
+local BASE_W, BASE_H, HEAD_H = 276, 320, 24
 local Env = type(getgenv) == "function" and getgenv() or _G
-local previous = Env.AutoRollV3
-if type(previous) == "table" and type(previous.Stop) == "function" then
-    pcall(previous.Stop)
-end
+local previous = Env.AutoRollV4
+if type(previous) == "table" and type(previous.Stop) == "function" then pcall(previous.Stop) end
 
-local S = {alive = true, running = false, busy = false, session = 0, cursor = 0,
-    message = "Ready. Select targets, then Start.", blocked = nil, lastIdle = os.clock()}
+local S = {alive = true, running = false, busy = false, session = 0, cursor = 0, minimized = false,
+    message = "idle | select targets, then start", blocked = nil, lastIdle = os.clock(), fitVersion = 0}
 local Runtime = {Config = CFG}
-Env.AutoRollV3 = Runtime
+Env.AutoRollV4 = Runtime
 local Connections, Updates, Interactive = {}, {}, {}
-local Records = {}
-local Labels = setmetatable({}, {__mode = "k"})
+local Records, Labels = {}, setmetatable({}, {__mode = "k"})
 local Lookup = {Monsters = {}, Buildings = {}}
 local refresh = function() end
 local drawStatus = function() end
-local gui
+local gui, main, scale, header, tabBar, content, footer, statusLabel
 
 local function connect(signal, callback)
     local connection = signal:Connect(callback)
@@ -113,10 +112,7 @@ for kind, pool in pairs(POOLS) do
 end
 
 local function status(message)
-    if S.message ~= message then
-        S.message = message
-        drawStatus()
-    end
+    if S.message ~= message then S.message = message drawStatus() end
 end
 
 local function pause(message)
@@ -160,9 +156,7 @@ end
 
 local function text(node)
     if not node then return "", false end
-    if node:IsA("TextLabel") or node:IsA("TextButton") or node:IsA("TextBox") then
-        return node.Text, true
-    end
+    if node:IsA("TextLabel") or node:IsA("TextButton") or node:IsA("TextBox") then return node.Text, true end
     if node:IsA("StringValue") then return node.Value, true end
     local nested = node:FindFirstChildWhichIsA("TextLabel", true)
     if nested then return nested.Text, true end
@@ -171,25 +165,25 @@ end
 
 local function getPrompt(display)
     local named = display:FindFirstChild("BuyPrompt", true)
-    if named and named:IsA("ProximityPrompt") then return named end
-    return named and named:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if not named then return nil end
+    if named:IsA("ProximityPrompt") then return named end
+    return named:FindFirstChildWhichIsA("ProximityPrompt", true)
 end
 
 local function readOffer(kind, display)
     local itemNode = field(display, "ItemName")
     local raw, readable = text(itemNode)
     local key = normalize(raw)
-    local mutation
     local info = Lookup[kind][key]
-    local mutationText = ""
+    local mutation, mutationText = nil, ""
     if kind == "Monsters" then
         mutationText = text(field(display, "Mutation"))
         if mutationText == "" then mutationText = tostring(display:GetAttribute("Mutation") or "") end
+        local plain = mutationText:gsub("<[^>]*>", ""):lower()
         local mutationKey = normalize(mutationText)
         for _, m in ipairs(MUTATIONS) do
             local mk = normalize(m.name)
-            local plainMutation = mutationText:gsub("<[^>]*>", ""):lower()
-            if mutationKey == mk or plainMutation:find("%f[%a]" .. mk .. "%f[%A]") then mutation = m.name end
+            if mutationKey == mk or plain:find("%f[%a]" .. mk .. "%f[%A]") then mutation = m.name end
             if not info then
                 local stripped
                 if key:sub(1, #mk) == mk then stripped = key:sub(#mk + 1)
@@ -202,9 +196,8 @@ local function readOffer(kind, display)
         end
     end
     local empty = key == "" or key == "sold" or key == "soldout" or key == "purchased" or key == "empty"
-    return {display = display, valid = readable, raw = raw, info = info,
-        mutation = mutation, empty = empty, prompt = getPrompt(display),
-        fingerprint = key .. "|" .. normalize(mutationText)}
+    return {display = display, valid = readable, raw = raw, info = info, mutation = mutation,
+        empty = empty, prompt = getPrompt(display), fingerprint = key .. "|" .. normalize(mutationText)}
 end
 
 local function wanted(kind, offer)
@@ -234,8 +227,9 @@ local function positionOf(instance)
         if node:IsA("Attachment") then return node.WorldPosition end
         if node:IsA("BasePart") then return node.Position end
         if node:IsA("Model") then
-            local part = node.PrimaryPart or node:FindFirstChildWhichIsA("BasePart", true)
-            if part then return node:GetPivot().Position end
+            if node.PrimaryPart or node:FindFirstChildWhichIsA("BasePart", true) then
+                return node:GetPivot().Position
+            end
         end
         node = node.Parent
     end
@@ -251,8 +245,7 @@ local function moveNear(instance, distance, session)
     root.AssemblyAngularVelocity = Vector3.zero
     root.CFrame = CFrame.new(position + offset, position)
     if not waitActive(CFG.TravelDelay, session) then return false end
-    local current = rootPart()
-    return current == root and (root.Position - position).Magnitude <= distance
+    return rootPart() == root and (root.Position - position).Magnitude <= distance
 end
 
 local function getRecord(kind)
@@ -260,10 +253,10 @@ local function getRecord(kind)
     local rollers = map and map:FindFirstChild("Rollers")
     local name = "Plot" .. tostring(CFG.Plot) .. "_" .. kind
     local roller = rollers and rollers:FindFirstChild(name)
-    if not roller then pause("Missing " .. name .. ". Check your plot.") return nil end
+    if not roller then pause("missing " .. name .. " | check plot") return nil end
     local record = Records[kind]
     if record and record.roller ~= roller and (#record.pending > 0 or record.phase == "waiting") then
-        pause("Roller changed while an offer was pending. Recheck your plot.")
+        pause("roller swapped with offer pending | recheck plot")
         return nil
     end
     if not record or record.roller ~= roller then
@@ -275,7 +268,7 @@ local function getRecord(kind)
         local button = roller:FindFirstChild("RollButton", true)
         local detector = button and button:FindFirstChild("RollClick", true)
         if not detector or not detector:IsA("ClickDetector") then
-            pause("Missing RollButton.RollClick on " .. name)
+            pause("missing RollButton.RollClick on " .. name)
             return nil
         end
         record.detector = detector
@@ -286,7 +279,7 @@ local function getRecord(kind)
             display = roller:FindFirstChild("Display" .. i, true)
             record.displays[i] = display
         end
-        if not display then pause("Missing " .. name .. ".Display" .. i) return nil end
+        if not display then pause("missing " .. name .. ".Display" .. i) return nil end
     end
     return record
 end
@@ -295,11 +288,10 @@ local function inspect(record)
     if #record.pending > 0 then return end
     local now = os.clock()
     if record.phase == "waiting" and now < record.due then return end
-    local offers, pieces = {}, {}
-    local unknown
+    local offers, pieces, unknown = {}, {}, nil
     for i, display in ipairs(record.displays) do
         if not display:IsDescendantOf(record.roller) then
-            pause("Display unloaded. Offers are protected; check your plot.") return
+            pause("display unloaded | offer protected, no reroll") return
         end
         local offer = readOffer(record.kind, display)
         offers[i] = offer
@@ -318,7 +310,7 @@ local function inspect(record)
     if now - record.stableAt < (CFG.FastBuy and 0.03 or 0.12) then return end
     if unknown then
         if now - record.due > math.max(2, CFG.PurchaseTimeout) then
-            pause(record.kind .. " " .. unknown .. ". No reroll sent.")
+            pause(record.kind .. " " .. unknown .. " | no reroll sent")
         end
         return
     end
@@ -347,17 +339,17 @@ end
 local function purchase(record, target, session)
     if not active(session) then return end
     if not CFG[record.kind] or not wanted(record.kind, target) then
-        block(record, target, "Pending offer protected. Re-enable it, or Release blocked offer.") return
+        block(record, target, "offer protected | re-enable it or release") return
     end
     local before = readOffer(record.kind, target.display)
-    if not before.valid then block(record, target, "Cannot read pending offer. No reroll sent.") return end
+    if not before.valid then block(record, target, "cannot read offer | no reroll sent") return end
     if before.fingerprint ~= target.fingerprint then clearTarget(record, target) return end
     local prompt = before.prompt
-    if not prompt then block(record, target, "Missing BuyPrompt for " .. target.info.name) return end
+    if not prompt then block(record, target, "missing BuyPrompt for " .. target.info.name) return end
     local root = rootPart()
     local origin = root and root.CFrame
     if not moveNear(prompt, prompt.MaxActivationDistance, session) then
-        if active(session) then block(record, target, "Could not reach " .. target.info.name .. ". No reroll sent.") end
+        if active(session) then block(record, target, "cannot reach " .. target.info.name .. " | no reroll") end
         return
     end
     local deadline = os.clock() + CFG.PurchaseTimeout
@@ -366,15 +358,15 @@ local function purchase(record, target, session)
     end
     if not active(session) then return end
     local current = readOffer(record.kind, target.display)
-    if not current.valid then block(record, target, "Offer labels changed. Lock kept; press Start to recheck.") return end
+    if not current.valid then block(record, target, "labels changed | lock kept, press start") return end
     if current.fingerprint ~= target.fingerprint then clearTarget(record, target) return end
     if not CFG[record.kind] or not wanted(record.kind, current) then
-        block(record, target, "Selection changed. Re-enable the offer, or explicitly Release it.") return
+        block(record, target, "selection changed | re-enable or release") return
     end
     if not prompt.Parent or not prompt.Enabled or current.prompt ~= prompt then
-        block(record, target, "BuyPrompt is not ready for " .. target.info.name) return
+        block(record, target, "BuyPrompt not ready for " .. target.info.name) return
     end
-    status("Buying " .. (target.mutation and target.mutation .. " " or "") .. target.info.name)
+    status("buying " .. (target.mutation and target.mutation .. " " or "") .. target.info.name)
     local sent, problem
     if CFG.FastBuy and type(fireproximityprompt) == "function" then
         sent, problem = pcall(fireproximityprompt, prompt)
@@ -389,12 +381,12 @@ local function purchase(record, target, session)
         S.activePrompt = nil
     end
     if not active(session) then return end
-    if not sent then block(record, target, "Prompt failed: " .. tostring(problem)) return end
+    if not sent then block(record, target, "prompt failed | " .. tostring(problem)) return end
     deadline = os.clock() + CFG.PurchaseTimeout
     local clearedAt
     while active(session) and os.clock() < deadline do
         if not target.display:IsDescendantOf(record.roller) or not record.roller:IsDescendantOf(workspace) then
-            block(record, target, "Display unloaded before confirmation. Offer lock kept.") return
+            block(record, target, "display unloaded before confirm | lock kept") return
         end
         local after = readOffer(record.kind, target.display)
         local consumed = after.valid and (after.empty or after.fingerprint ~= target.fingerprint)
@@ -408,7 +400,7 @@ local function purchase(record, target, session)
                     root.AssemblyLinearVelocity = Vector3.zero
                     root.CFrame = origin
                 end
-                status("Offer cleared: " .. target.info.name)
+                status("bought " .. target.info.name .. " | reroll cleared")
                 refresh()
                 return
             end
@@ -418,7 +410,7 @@ local function purchase(record, target, session)
         RunService.Heartbeat:Wait()
     end
     if active(session) then
-        block(record, target, "Unconfirmed: " .. target.info.name .. ". Start retries; Release explicitly skips.")
+        block(record, target, "unconfirmed " .. target.info.name .. " | start retries, release skips")
     end
 end
 
@@ -426,29 +418,30 @@ local function roll(record, session)
     if not active(session) or S.busy or hasPending() or not CFG[record.kind] then return end
     local detector = record.detector
     if not moveNear(detector, detector.MaxActivationDistance, session) then
-        if active(session) then pause("Could not reach " .. record.kind .. " RollButton.") end
+        if active(session) then pause("cannot reach " .. record.kind .. " RollButton") end
         return
     end
     for _, other in pairs(Records) do
         if CFG[other.kind] then inspect(other) end
     end
-    if not active(session) or hasPending() or record.phase ~= "ready" or not CFG[record.kind] or not hasSelection(record.kind) then return end
+    if not active(session) or hasPending() or record.phase ~= "ready" then return end
+    if not CFG[record.kind] or not hasSelection(record.kind) then return end
     for _, other in pairs(Records) do
         if CFG[other.kind] and hasSelection(other.kind) and other.phase == "checking" then return end
     end
-    if type(fireclickdetector) ~= "function" then pause("Executor is missing fireclickdetector.") return end
+    if type(fireclickdetector) ~= "function" then pause("executor lacks fireclickdetector") return end
     local ok, problem = pcall(fireclickdetector, detector, 0)
-    if not ok then pause("Roll failed: " .. tostring(problem)) return end
+    if not ok then pause("roll failed | " .. tostring(problem)) return end
     record.phase = "waiting"
     record.due = os.clock() + math.max(1.5, CFG.RollDelay)
     record.signature = nil
     record.skipped = {}
     record.consumed = {}
-    status("Rolling " .. record.kind .. " | Plot " .. CFG.Plot)
+    status("rolling " .. record.kind .. " | plot " .. CFG.Plot)
 end
 
 local function tick()
-    if not rootPart() then status("Waiting for your character...") return end
+    if not rootPart() then status("waiting for character...") return end
     local ready = {}
     for _, kind in ipairs(KINDS) do
         if CFG[kind] and hasSelection(kind) then
@@ -469,7 +462,7 @@ local function tick()
             return
         end
     end
-    if #ready == 0 then status("Choose targets in Monsters or Buildings.") return end
+    if #ready == 0 then status("choose targets in monsters or buildings") return end
     for i = 1, #ready do
         local index = (S.cursor + i - 1) % #ready + 1
         local record = ready[index]
@@ -482,19 +475,19 @@ local function tick()
 end
 
 local function setRunning(enabled)
-    if not enabled then pause("Paused. Pending offers are kept.") return end
-    if type(fireclickdetector) ~= "function" then pause("Executor is missing fireclickdetector.") return end
+    if not enabled then pause("paused | pending offers kept") return end
+    if type(fireclickdetector) ~= "function" then pause("executor lacks fireclickdetector") return end
     if not (CFG.Monsters and hasSelection("Monsters")) and not (CFG.Buildings and hasSelection("Buildings")) and not hasPending() then
-        pause("Select at least one target on an enabled roller.") return
+        pause("select at least one target first") return
     end
     if CFG.Monsters and CFG.MutationOnly and not CFG.AnyMutation then
-        local selected = false
-        for _, enabledMutation in pairs(CFG.Mut) do if enabledMutation then selected = true end end
-        if not selected then pause("Choose a mutation in Traits, or disable its filter.") return end
+        local any = false
+        for _, on in pairs(CFG.Mut) do if on then any = true end end
+        if not any then pause("pick a mutation in traits, or disable filter") return end
     end
     S.session = S.session + 1
     S.running = true
-    status("Running | Plot " .. CFG.Plot)
+    status("running | plot " .. CFG.Plot)
     refresh()
 end
 
@@ -516,8 +509,7 @@ local function idlePulse()
     end
     if not ok and not S.idleWarned then
         S.idleWarned = true
-        warn("AutoRoll: anti-idle input is unavailable in this executor.")
-        status("Anti-idle input unavailable; check executor support.")
+        status("anti-idle input unavailable in this executor")
     end
 end
 
@@ -527,32 +519,30 @@ function Runtime.Stop()
     S.running = false
     S.session = S.session + 1
     if S.activePrompt then pcall(function() S.activePrompt:InputHoldEnd() end) end
-    for _, connection in ipairs(Connections) do connection:Disconnect() end
+    for _, connection in ipairs(Connections) do pcall(function() connection:Disconnect() end) end
     if gui then gui:Destroy() end
-    if Env.AutoRollV3 == Runtime then Env.AutoRollV3 = nil end
+    if Env.AutoRollV4 == Runtime then Env.AutoRollV4 = nil end
 end
 
 local UI = {}
-UI.accent = Color3.fromRGB(198, 239, 134)
-UI.background = Color3.fromRGB(25, 29, 33)
-UI.row = Color3.fromRGB(33, 39, 44)
-UI.muted = Color3.fromRGB(133, 148, 158)
-UI.text = Color3.fromRGB(223, 230, 232)
+UI.amber = Color3.fromRGB(255, 179, 64)
+UI.mint = Color3.fromRGB(99, 230, 176)
+UI.bg = Color3.fromRGB(17, 24, 37)
+UI.bar = Color3.fromRGB(24, 33, 50)
+UI.row = Color3.fromRGB(24, 33, 49)
+UI.line = Color3.fromRGB(43, 54, 72)
+UI.text = Color3.fromRGB(232, 237, 245)
+UI.muted = Color3.fromRGB(147, 160, 180)
+UI.dim = Color3.fromRGB(109, 122, 143)
 UI.order = 0
+UI.ROW, UI.SEC, UI.NUM, UI.CELL, UI.RAR = 17, 13, 18, 16, 18
 
 function UI.make(class, properties, parent)
     local object = Instance.new(class)
     for key, value in pairs(properties or {}) do object[key] = value end
+    if object:IsA("GuiObject") then object.BorderSizePixel = 0 end
     object.Parent = parent
     return object
-end
-
-function UI.corner(parent, radius)
-    UI.make("UICorner", {CornerRadius = UDim.new(0, radius or 6)}, parent)
-end
-
-function UI.layout(parent, gap)
-    return UI.make("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, gap or 5)}, parent)
 end
 
 function UI.next()
@@ -560,87 +550,101 @@ function UI.next()
     return UI.order
 end
 
-function UI.label(parent, value, size, color)
-    return UI.make("TextLabel", {Text = value, Font = Enum.Font.Gotham, TextSize = size or 12,
-        TextColor3 = color or UI.text, BackgroundTransparency = 1, BorderSizePixel = 0,
-        TextXAlignment = Enum.TextXAlignment.Left, TextWrapped = true,
-        Size = UDim2.new(1, 0, 0, 18), AutomaticSize = Enum.AutomaticSize.Y}, parent)
+function UI.corner(parent, radius)
+    UI.make("UICorner", {CornerRadius = UDim.new(0, radius or 3)}, parent)
 end
 
-function UI.button(parent, value, callback)
-    local button = UI.make("TextButton", {Text = value, Font = Enum.Font.GothamMedium, TextSize = 12,
-        TextColor3 = UI.text, BackgroundColor3 = UI.row, BorderSizePixel = 0,
-        Size = UDim2.new(1, 0, 0, 34), LayoutOrder = UI.next(), AutoButtonColor = true,
-        TextWrapped = true, TextScaled = true}, parent)
-    UI.make("UITextSizeConstraint", {MinTextSize = 9, MaxTextSize = 12}, button)
-    UI.corner(button, 5)
+function UI.list(parent, gap)
+    return UI.make("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, gap or 2)}, parent)
+end
+
+function UI.text(parent, value, size, color, height)
+    local label = UI.make("TextLabel", {Text = value, Font = Enum.Font.Gotham, TextSize = size or 10,
+        TextColor3 = color or UI.text, BackgroundTransparency = 1, TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd, Size = UDim2.new(1, 0, 0, height or 14),
+        LayoutOrder = UI.next()}, parent)
+    return label
+end
+
+function UI.button(parent, height, callback, baseColor)
+    local base = baseColor or UI.row
+    local button = UI.make("TextButton", {Text = "", AutoButtonColor = false, BackgroundColor3 = base,
+        Size = UDim2.new(1, 0, 0, height or UI.ROW), LayoutOrder = UI.next(), Active = true}, parent)
+    UI.corner(button, 3)
     table.insert(Interactive, button)
     connect(button.Activated, callback)
+    connect(button.MouseEnter, function() button.BackgroundColor3 = Color3.fromRGB(33, 45, 65) end)
+    connect(button.MouseLeave, function() button.BackgroundColor3 = base end)
     return button
 end
 
 function UI.section(parent, value)
-    local label = UI.label(parent, value, 10, UI.muted)
-    label.LayoutOrder = UI.next()
-    label.Size = UDim2.new(1, 0, 0, 23)
+    local label = UI.text(parent, value, 8, UI.dim, UI.SEC)
     label.Font = Enum.Font.GothamBold
-    return label
+    label.Text = value:upper()
+    local pad = UI.make("UIPadding", {PaddingTop = UDim.new(0, 5)}, label)
+    return label, pad
 end
 
 function UI.toggle(parent, value, getter, setter)
-    local button = UI.button(parent, "", function() setter(not getter()) refresh() end)
-    button.AutomaticSize = Enum.AutomaticSize.Y
-    button.Size = UDim2.new(1, 0, 0, 34)
-    local label = UI.label(button, value, 12)
-    label.Position = UDim2.fromOffset(9, 8)
-    label.Size = UDim2.new(1, -65, 0, 18)
-    local track = UI.make("Frame", {Size = UDim2.fromOffset(30, 17), AnchorPoint = Vector2.new(1, 0.5),
-        Position = UDim2.new(1, -9, 0.5, 0), BackgroundColor3 = UI.row, BorderSizePixel = 0}, button)
-    UI.corner(track, 9)
-    local knob = UI.make("Frame", {Size = UDim2.fromOffset(11, 11), Position = UDim2.fromOffset(3, 3),
-        BackgroundColor3 = UI.muted, BorderSizePixel = 0}, track)
-    UI.corner(knob, 7)
+    local button = UI.button(parent, UI.ROW, function() setter(not getter()) refresh() end)
+    local label = UI.text(button, value, 10, UI.text, UI.ROW - 4)
+    label.Position = UDim2.fromOffset(6, 2)
+    label.Size = UDim2.new(1, -40, 0, UI.ROW - 4)
+    label.LayoutOrder = 0
+    local track = UI.make("Frame", {Size = UDim2.fromOffset(22, 11), AnchorPoint = Vector2.new(1, 0.5),
+        Position = UDim2.new(1, -5, 0.5, 0), BackgroundColor3 = Color3.fromRGB(44, 55, 77)}, button)
+    UI.corner(track, 6)
+    local knob = UI.make("Frame", {Size = UDim2.fromOffset(9, 9), Position = UDim2.fromOffset(1, 1),
+        BackgroundColor3 = Color3.fromRGB(125, 138, 160)}, track)
+    UI.corner(knob, 5)
     table.insert(Updates, function()
-        local enabled = getter()
-        track.BackgroundColor3 = enabled and UI.accent or Color3.fromRGB(62, 73, 80)
-        knob.BackgroundColor3 = enabled and Color3.fromRGB(38, 53, 28) or UI.muted
-        knob.Position = UDim2.fromOffset(enabled and 16 or 3, 3)
-        label.TextColor3 = enabled and UI.text or UI.muted
+        local on = getter()
+        track.BackgroundColor3 = on and UI.amber or Color3.fromRGB(44, 55, 77)
+        knob.BackgroundColor3 = on and Color3.fromRGB(42, 28, 5) or Color3.fromRGB(125, 138, 160)
+        knob.Position = UDim2.fromOffset(on and 12 or 1, 1)
+        label.TextColor3 = on and UI.text or UI.muted
     end)
     return button
 end
 
-function UI.check(parent, value, getter, setter, color)
-    local button = UI.button(parent, "", function() setter(not getter()) refresh() end)
-    local label = UI.label(button, value, 11, color)
-    label.AutomaticSize = Enum.AutomaticSize.None
-    label.TextScaled = true
-    label.Size = UDim2.new(1, -38, 1, -8)
-    label.Position = UDim2.fromOffset(8, 4)
-    UI.make("UITextSizeConstraint", {MinTextSize = 9, MaxTextSize = 11}, label)
-    local mark = UI.make("TextLabel", {AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -8, 0.5, 0),
-        Size = UDim2.fromOffset(15, 15), BorderSizePixel = 0, Font = Enum.Font.GothamBold,
-        TextSize = 10, Text = "", BackgroundColor3 = UI.row, TextColor3 = UI.background}, button)
-    UI.corner(mark, 3)
+function UI.check(parent, value, getter, setter, color, height)
+    local button = UI.button(parent, height or UI.CELL, function() setter(not getter()) refresh() end,
+        Color3.fromRGB(20, 27, 40))
+    local box = UI.make("Frame", {Size = UDim2.fromOffset(10, 10), Position = UDim2.fromOffset(4, ((height or UI.CELL) - 10) / 2),
+        BackgroundColor3 = Color3.fromRGB(17, 24, 37)}, button)
+    UI.make("UIStroke", {Color = Color3.fromRGB(60, 74, 99), Thickness = 1}, box)
+    UI.corner(box, 2)
+    local mark = UI.make("TextLabel", {Text = "x", Font = Enum.Font.GothamBold, TextSize = 8,
+        TextColor3 = Color3.fromRGB(35, 23, 3), BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1),
+        TextTransparency = 1}, box)
+    local label = UI.text(button, value, 9, color or UI.muted, (height or UI.CELL) - 4)
+    label.Position = UDim2.fromOffset(18, 2)
+    label.Size = UDim2.new(1, -22, 0, (height or UI.CELL) - 4)
+    label.LayoutOrder = 0
     table.insert(Updates, function()
-        local checked = getter()
-        mark.Text = checked and "x" or ""
-        mark.BackgroundColor3 = checked and UI.accent or Color3.fromRGB(67, 78, 87)
+        local on = getter()
+        box.BackgroundColor3 = on and UI.amber or Color3.fromRGB(17, 24, 37)
+        mark.TextTransparency = on and 0 or 1
+        label.TextColor3 = on and (color or UI.text) or UI.dim
     end)
-    return button, label, mark
+    return button, label, box, mark
 end
 
 function UI.number(parent, title, getter, setter, minimum, maximum, integer)
-    local row = UI.make("Frame", {Size = UDim2.new(1, 0, 0, 35), BackgroundTransparency = 1,
-        LayoutOrder = UI.next(), AutomaticSize = Enum.AutomaticSize.Y}, parent)
-    local label = UI.label(row, title, 12)
-    label.Position = UDim2.fromOffset(5, 8)
-    label.Size = UDim2.new(1, -105, 0, 18)
-    local input = UI.make("TextBox", {Size = UDim2.fromOffset(81, 28), AnchorPoint = Vector2.new(1, 0),
-        Position = UDim2.new(1, -2, 0, 3), Text = tostring(getter()), Font = Enum.Font.Code,
-        TextSize = 12, TextColor3 = UI.text, BackgroundColor3 = UI.row, BorderSizePixel = 0,
-        ClearTextOnFocus = false}, row)
-    UI.corner(input, 4)
+    local row = UI.make("Frame", {Size = UDim2.new(1, 0, 0, UI.NUM), BackgroundColor3 = UI.row,
+        LayoutOrder = UI.next()}, parent)
+    UI.corner(row, 3)
+    local label = UI.text(row, title, 9, UI.muted, UI.NUM - 6)
+    label.Position = UDim2.fromOffset(6, 3)
+    label.Size = UDim2.new(1, -64, 0, UI.NUM - 6)
+    label.LayoutOrder = 0
+    local input = UI.make("TextBox", {Size = UDim2.fromOffset(48, 13), AnchorPoint = Vector2.new(1, 0),
+        Position = UDim2.new(1, -4, 0, 2.5), Text = tostring(getter()), Font = Enum.Font.Code, TextSize = 9,
+        TextColor3 = UI.amber, BackgroundColor3 = Color3.fromRGB(17, 24, 37), ClearTextOnFocus = false,
+        TextTruncate = Enum.TextTruncate.AtEnd}, row)
+    UI.make("UIStroke", {Color = UI.line, Thickness = 1}, input)
+    UI.corner(input, 3)
     table.insert(Interactive, input)
     connect(input.FocusLost, function()
         local value = tonumber(input.Text)
@@ -652,97 +656,146 @@ function UI.number(parent, title, getter, setter, minimum, maximum, integer)
         refresh()
     end)
     table.insert(Updates, function()
-        if not input:IsFocused() then input.Text = integer and tostring(getter()) or string.format("%.2f", getter()) end
+        if not input:IsFocused() then
+            input.Text = integer and tostring(getter()) or string.format("%.2f", getter())
+        end
     end)
     return input
 end
 
-gui = UI.make("ScreenGui", {Name = "AutoRollV3", ResetOnSpawn = false, IgnoreGuiInset = true,
+gui = UI.make("ScreenGui", {Name = "AutoRollV4", ResetOnSpawn = false, IgnoreGuiInset = true,
     ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 10000})
 local parented = false
 if type(gethui) == "function" then parented = pcall(function() gui.Parent = gethui() end) end
 if not parented or not gui.Parent then parented = pcall(function() gui.Parent = game:GetService("CoreGui") end) end
 if not parented or not gui.Parent then gui.Parent = LP:WaitForChild("PlayerGui") end
 
-local main = UI.make("Frame", {Name = "Window", AnchorPoint = Vector2.new(0.5, 0.5),
-    Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(520, 560),
-    BackgroundColor3 = UI.background, BorderSizePixel = 0, Active = true, ClipsDescendants = true}, gui)
-UI.corner(main, 9)
-UI.make("UIStroke", {Color = Color3.fromRGB(69, 80, 72), Thickness = 1}, main)
-local scale = UI.make("UIScale", {Scale = 1}, main)
-local header = UI.make("Frame", {Size = UDim2.new(1, -24, 0, 34), Position = UDim2.fromOffset(12, 8),
-    BackgroundTransparency = 1}, main)
-local title = UI.label(header, "Auto Roller", 15, UI.accent)
+main = UI.make("Frame", {Name = "Window", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+    Size = UDim2.fromOffset(BASE_W, BASE_H), BackgroundColor3 = UI.bg, Active = true, ClipsDescendants = true}, gui)
+UI.corner(main, 6)
+UI.make("UIStroke", {Color = Color3.fromRGB(51, 65, 90), Thickness = 1}, main)
+scale = UI.make("UIScale", {Scale = 1}, main)
+
+header = UI.make("Frame", {Size = UDim2.new(1, 0, 0, 20), BackgroundColor3 = UI.bar}, main)
+local title = UI.text(header, "AUTO ROLLER", 10, UI.amber, 14)
 title.Font = Enum.Font.GothamBold
-title.Position = UDim2.fromOffset(3, 7)
-title.Size = UDim2.new(1, -85, 0, 20)
-local minimize = UI.button(header, "-", function() end)
-minimize.Size = UDim2.fromOffset(28, 28)
-minimize.Position = UDim2.new(1, -62, 0, 3)
-local close = UI.button(header, "x", Runtime.Stop)
-close.Size = UDim2.fromOffset(28, 28)
-close.Position = UDim2.new(1, -28, 0, 3)
-local tabBar = UI.make("Frame", {Size = UDim2.new(1, -24, 0, 35), Position = UDim2.fromOffset(12, 51),
+title.Position = UDim2.fromOffset(7, 3)
+title.Size = UDim2.new(1, -50, 0, 14)
+title.LayoutOrder = 0
+local miniButton = UI.make("TextButton", {Text = "-", Font = Enum.Font.GothamBold, TextSize = 10,
+    TextColor3 = UI.muted, BackgroundColor3 = Color3.fromRGB(38, 49, 74), Size = UDim2.fromOffset(16, 14),
+    Position = UDim2.new(1, -38, 0, 3), AutoButtonColor = false}, header)
+UI.corner(miniButton, 3)
+table.insert(Interactive, miniButton)
+local closeButton = UI.make("TextButton", {Text = "x", Font = Enum.Font.GothamBold, TextSize = 9,
+    TextColor3 = UI.muted, BackgroundColor3 = Color3.fromRGB(38, 49, 74), Size = UDim2.fromOffset(16, 14),
+    Position = UDim2.new(1, -20, 0, 3), AutoButtonColor = false}, header)
+UI.corner(closeButton, 3)
+table.insert(Interactive, closeButton)
+connect(closeButton.Activated, Runtime.Stop)
+
+tabBar = UI.make("Frame", {Position = UDim2.fromOffset(4, 23), Size = UDim2.new(1, -8, 0, 19),
     BackgroundTransparency = 1}, main)
-UI.make("UIGridLayout", {CellSize = UDim2.new(0.25, -5, 1, 0), CellPadding = UDim2.fromOffset(6, 0),
+UI.make("UIGridLayout", {CellSize = UDim2.new(0.25, -2, 1, 0), CellPadding = UDim2.fromOffset(3, 0),
     FillDirectionMaxCells = 4, SortOrder = Enum.SortOrder.LayoutOrder}, tabBar)
-local content = UI.make("Frame", {Position = UDim2.fromOffset(12, 99), Size = UDim2.new(1, -24, 1, -154),
+
+content = UI.make("Frame", {Position = UDim2.fromOffset(4, 45), Size = UDim2.new(1, -8, 1, -68),
     BackgroundTransparency = 1}, main)
-local footer = UI.make("Frame", {Position = UDim2.new(0, 12, 1, -47), Size = UDim2.new(1, -24, 0, 35),
-    BackgroundColor3 = UI.row, BorderSizePixel = 0}, main)
-UI.corner(footer, 5)
-local statusLabel = UI.label(footer, S.message, 10, UI.accent)
-statusLabel.AutomaticSize = Enum.AutomaticSize.None
-statusLabel.TextScaled = true
-statusLabel.Position = UDim2.fromOffset(9, 3)
-statusLabel.Size = UDim2.new(1, -18, 1, -6)
-UI.make("UITextSizeConstraint", {MinTextSize = 9, MaxTextSize = 11}, statusLabel)
-local Pages, TabButtons = {}, {}
+
+footer = UI.make("Frame", {Position = UDim2.new(0, 4, 1, -21), Size = UDim2.new(1, -8, 0, 17),
+    BackgroundColor3 = UI.bar}, main)
+UI.corner(footer, 3)
+statusLabel = UI.text(footer, S.message, 8, UI.mint, 13)
+statusLabel.Font = Enum.Font.Code
+statusLabel.Position = UDim2.fromOffset(6, 2)
+statusLabel.Size = UDim2.new(1, -12, 0, 13)
+statusLabel.LayoutOrder = 0
+
+local Pages, TabButtons, Fitters = {}, {}, {}
 local currentTab = "Main"
 
+local function fitCanvas(page)
+    local existing = Fitters[page.Name]
+    if existing then existing() return end
+    local layout = page:FindFirstChildOfClass("UIListLayout")
+    if not layout then return end
+    local padding = page:FindFirstChildOfClass("UIPadding")
+    local function update()
+        if not S.alive or not layout.Parent then return end
+        local y = layout.AbsoluteContentSize.Y
+        if padding then y = y + padding.PaddingTop.Offset + padding.PaddingBottom.Offset end
+        page.CanvasSize = UDim2.fromOffset(0, math.max(y + 4, 1))
+    end
+    Fitters[page.Name] = update
+    update()
+    connect(layout:GetPropertyChangedSignal("AbsoluteContentSize"), update)
+    task.defer(update)
+end
+
 for _, name in ipairs({"Main", "Monsters", "Buildings", "Traits"}) do
-    local page = UI.make("ScrollingFrame", {Name = name, Size = UDim2.fromScale(1, 1),
-        BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3,
-        ScrollBarImageColor3 = Color3.fromRGB(107, 124, 118), CanvasSize = UDim2.new(),
-        AutomaticCanvasSize = Enum.AutomaticSize.Y, ScrollingDirection = Enum.ScrollingDirection.Y,
+    local page = UI.make("ScrollingFrame", {Name = name, Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
+        ScrollBarThickness = 2, ScrollBarImageColor3 = Color3.fromRGB(70, 88, 118), CanvasSize = UDim2.new(),
+        AutomaticCanvasSize = Enum.AutomaticSize.None, ScrollingEnabled = true, Active = true,
+        VerticalScrollBarInset = Enum.ScrollBarInset.None, ScrollingDirection = Enum.ScrollingDirection.Y,
         Visible = name == "Main"}, content)
-    UI.make("UIPadding", {PaddingRight = UDim.new(0, 9), PaddingLeft = UDim.new(0, 2),
-        PaddingTop = UDim.new(0, 2), PaddingBottom = UDim.new(0, 10)}, page)
-    UI.layout(page, 5)
+    UI.make("UIPadding", {PaddingRight = UDim.new(0, 6), PaddingLeft = UDim.new(0, 1),
+        PaddingTop = UDim.new(0, 1), PaddingBottom = UDim.new(0, 6)}, page)
+    UI.list(page, 2)
     Pages[name] = page
-    local tab = UI.button(tabBar, name, function()
-        currentTab = name
-        for key, p in pairs(Pages) do p.Visible = key == name end
-        refresh()
-    end)
+    local tab = UI.make("TextButton", {Text = name:upper(), Font = Enum.Font.GothamBold, TextSize = 8,
+        TextColor3 = UI.dim, BackgroundColor3 = UI.row, AutoButtonColor = false, Active = true}, tabBar)
+    UI.corner(tab, 3)
+    table.insert(Interactive, tab)
     TabButtons[name] = tab
+    connect(tab.Activated, function()
+        currentTab = name
+        for key, other in pairs(Pages) do other.Visible = key == name end
+        page.CanvasPosition = Vector2.new(0, 0)
+        refresh()
+        task.defer(function() fitCanvas(page) end)
+    end)
+    fitCanvas(page)
 end
 
 local minimized = false
-local windowWidth, windowHeight = 520, 560
-local fit
+local function applySize()
+    main.Size = UDim2.fromOffset(BASE_W, minimized and HEAD_H or BASE_H)
+    tabBar.Visible = not minimized
+    content.Visible = not minimized
+    footer.Visible = not minimized
+    miniButton.Text = minimized and "+" or "-"
+end
+
+connect(miniButton.Activated, function()
+    minimized = not minimized
+    S.minimized = minimized
+    applySize()
+end)
+
 local function viewport()
     local camera = workspace.CurrentCamera
-    return camera and camera.ViewportSize or Vector2.new(1280, 720)
+    local size = camera and camera.ViewportSize or Vector2.new(1280, 720)
+    if size.X < 1 or size.Y < 1 then size = Vector2.new(1280, 720) end
+    return size
 end
 
 local function clampCenter(center)
     local view = viewport()
     local half = main.AbsoluteSize * 0.5
-    return Vector2.new(math.clamp(center.X, half.X + 8, math.max(half.X + 8, view.X - half.X - 8)),
-        math.clamp(center.Y, half.Y + 8, math.max(half.Y + 8, view.Y - half.Y - 8)))
+    return Vector2.new(
+        math.clamp(center.X, half.X + 4, math.max(half.X + 4, view.X - half.X - 4)),
+        math.clamp(center.Y, half.Y + 4, math.max(half.Y + 4, view.Y - half.Y - 4)))
 end
 
+local fit
 fit = function(center)
-    S.fitVersion = (S.fitVersion or 0) + 1
+    if not S.alive then return end
+    S.fitVersion = S.fitVersion + 1
     local version = S.fitVersion
-    if S.sizeTween then S.sizeTween:Cancel() S.sizeTween = nil end
     local view = viewport()
-    windowWidth = CFG.AutoFit and math.clamp(view.X - 28, 320, 520) or 520
-    windowHeight = CFG.AutoFit and math.clamp(view.Y - 28, 320, 560) or 560
-    scale.Scale = CFG.AutoFit and math.min(1, math.max(0.1, (view.X - 24) / windowWidth),
-        math.max(0.1, (view.Y - 24) / windowHeight)) or 1
-    main.Size = UDim2.fromOffset(windowWidth, minimized and 49 or windowHeight)
+    local auto = math.clamp(math.min((view.X - 10) / BASE_W, (view.Y - 10) / BASE_H), 0.45, 1.6)
+    scale.Scale = CFG.AutoFit and auto or math.clamp(CFG.GUIScale or 1, 0.45, 1.6)
+    applySize()
     if center then
         main.Position = UDim2.fromScale(0.5, 0.5)
     else
@@ -757,162 +810,204 @@ fit = function(center)
 end
 
 local mainPage = Pages.Main
-local startButton = UI.button(mainPage, "Start loop", function() setRunning(not S.running) end)
-startButton.Size = UDim2.new(1, 0, 0, 38)
-UI.section(mainPage, "ROLLING")
+local startButton = UI.make("TextButton", {Text = "START LOOP", Font = Enum.Font.GothamBold, TextSize = 10,
+    TextColor3 = Color3.fromRGB(35, 23, 3), BackgroundColor3 = UI.amber, Size = UDim2.new(1, 0, 0, 22),
+    AutoButtonColor = false, Active = true, LayoutOrder = UI.next()}, mainPage)
+UI.corner(startButton, 4)
+table.insert(Interactive, startButton)
+connect(startButton.Activated, function() setRunning(not S.running) end)
+
+UI.section(mainPage, "rolling")
 for _, kind in ipairs(KINDS) do
     UI.toggle(mainPage, kind, function() return CFG[kind] end, function(value) CFG[kind] = value end)
 end
 UI.number(mainPage, "Plot", function() return CFG.Plot end, function(value)
-    if S.busy or hasPending() then status("Resolve or release pending offers before changing plots.") return end
-    pause("Plot changed. Press Start when ready.")
+    if S.busy or hasPending() then status("resolve pending offer before plot change") return end
+    pause("plot changed | press start")
     CFG.Plot = value
     Records = {}
 end, 1, 8, true)
-UI.section(mainPage, "BEHAVIOR")
+UI.section(mainPage, "behaviour")
 UI.toggle(mainPage, "Fast buy", function() return CFG.FastBuy end, function(value) CFG.FastBuy = value end)
 UI.toggle(mainPage, "Anti-idle", function() return CFG.AntiIdle end, function(value) CFG.AntiIdle = value end)
 UI.toggle(mainPage, "Auto-fit GUI", function() return CFG.AutoFit end, function(value) CFG.AutoFit = value fit(false) end)
-UI.section(mainPage, "TIMING")
-UI.number(mainPage, "Roll delay (s)", function() return CFG.RollDelay end, function(value) CFG.RollDelay = value end, 1.5, 4)
-UI.number(mainPage, "Teleport settle (s)", function() return CFG.TravelDelay end, function(value) CFG.TravelDelay = value end, 0.02, 0.3)
-UI.number(mainPage, "Confirm timeout (s)", function() return CFG.PurchaseTimeout end, function(value) CFG.PurchaseTimeout = value end, 1, 5)
-UI.button(mainPage, "Center window", function() fit(true) end)
-local releaseButton = UI.button(mainPage, "Release blocked offer", function()
+UI.number(mainPage, "GUI scale", function() return CFG.GUIScale end, function(value)
+    CFG.GUIScale = value
+    fit(false)
+end, 0.45, 1.6)
+UI.section(mainPage, "timing")
+UI.number(mainPage, "Roll delay", function() return CFG.RollDelay end, function(value) CFG.RollDelay = value end, 1.5, 4)
+UI.number(mainPage, "Tp settle", function() return CFG.TravelDelay end, function(value) CFG.TravelDelay = value end, 0.02, 0.3)
+UI.number(mainPage, "Confirm timeout", function() return CFG.PurchaseTimeout end, function(value) CFG.PurchaseTimeout = value end, 1, 5)
+UI.section(mainPage, "window")
+local recenter = UI.make("TextButton", {Text = "Center window", Font = Enum.Font.Gotham, TextSize = 9,
+    TextColor3 = UI.muted, BackgroundColor3 = UI.row, Size = UDim2.new(1, 0, 0, 16), AutoButtonColor = false,
+    Active = true, LayoutOrder = UI.next()}, mainPage)
+UI.corner(recenter, 3)
+table.insert(Interactive, recenter)
+connect(recenter.Activated, function() fit(true) end)
+local release = UI.make("TextButton", {Text = "Release blocked offer", Font = Enum.Font.Gotham, TextSize = 9,
+    TextColor3 = Color3.fromRGB(255, 122, 138), BackgroundColor3 = UI.row, Size = UDim2.new(1, 0, 0, 16),
+    AutoButtonColor = false, Active = true, Visible = false, LayoutOrder = UI.next()}, mainPage)
+UI.corner(release, 3)
+table.insert(Interactive, release)
+connect(release.Activated, function()
     if S.running or not S.blocked then return end
     local record, target = S.blocked.record, S.blocked.target
     record.skipped[target.display] = target.fingerprint
     clearTarget(record, target)
-    status("Offer explicitly skipped. Press Start to resume.")
+    status("offer released | press start to resume")
     refresh()
 end)
+
 table.insert(Updates, function()
-    startButton.Text = S.running and "Pause loop" or "Start loop"
-    startButton.BackgroundColor3 = S.running and UI.row or UI.accent
-    startButton.TextColor3 = S.running and UI.text or UI.background
-    releaseButton.Visible = S.blocked ~= nil and not S.running
+    startButton.Text = S.running and "PAUSE LOOP" or "START LOOP"
+    startButton.BackgroundColor3 = S.running and UI.row or UI.amber
+    startButton.TextColor3 = S.running and UI.text or Color3.fromRGB(35, 23, 3)
+    release.Visible = S.blocked ~= nil and not S.running
 end)
 
 for _, kind in ipairs(KINDS) do
     local page = Pages[kind]
     UI.toggle(page, "Roll " .. kind:lower(), function() return CFG[kind] end, function(value) CFG[kind] = value end)
-    local actions = UI.make("Frame", {Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1,
+    local actions = UI.make("Frame", {Size = UDim2.new(1, 0, 0, 16), BackgroundTransparency = 1,
         LayoutOrder = UI.next()}, page)
-    UI.make("UIGridLayout", {CellSize = UDim2.new(0.5, -3, 1, 0), CellPadding = UDim2.fromOffset(6, 0),
+    UI.make("UIGridLayout", {CellSize = UDim2.new(0.5, -2, 1, 0), CellPadding = UDim2.fromOffset(3, 0),
         SortOrder = Enum.SortOrder.LayoutOrder}, actions)
-    UI.button(actions, "Select all", function()
-        for _, items in pairs(POOLS[kind]) do for _, name in ipairs(items) do CFG.Selected[kind][name] = true end end
+    local selectAll = UI.make("TextButton", {Text = "Select all", Font = Enum.Font.Gotham, TextSize = 8,
+        TextColor3 = UI.mint, BackgroundColor3 = UI.row, AutoButtonColor = false, Active = true}, actions)
+    UI.corner(selectAll, 3)
+    table.insert(Interactive, selectAll)
+    connect(selectAll.Activated, function()
+        for _, items in pairs(POOLS[kind]) do
+            for _, name in ipairs(items) do CFG.Selected[kind][name] = true end
+        end
         refresh()
     end)
-    UI.button(actions, "Clear", function() CFG.Selected[kind] = {} refresh() end)
+    local clearAll = UI.make("TextButton", {Text = "Clear", Font = Enum.Font.Gotham, TextSize = 8,
+        TextColor3 = UI.muted, BackgroundColor3 = UI.row, AutoButtonColor = false, Active = true}, actions)
+    UI.corner(clearAll, 3)
+    table.insert(Interactive, clearAll)
+    connect(clearAll.Activated, function() CFG.Selected[kind] = {} refresh() end)
+
     local search = UI.make("TextBox", {Text = "", PlaceholderText = "Search " .. kind:lower(),
-        ClearTextOnFocus = false, Font = Enum.Font.Gotham, TextSize = 12, TextColor3 = UI.text,
-        PlaceholderColor3 = UI.muted, BackgroundColor3 = UI.row, BorderSizePixel = 0,
-        Size = UDim2.new(1, 0, 0, 31), LayoutOrder = UI.next()}, page)
-    UI.corner(search, 5)
+        PlaceholderColor3 = UI.dim, ClearTextOnFocus = false, Font = Enum.Font.Gotham, TextSize = 9,
+        TextColor3 = UI.text, BackgroundColor3 = Color3.fromRGB(17, 24, 37), Size = UDim2.new(1, 0, 0, 16),
+        LayoutOrder = UI.next(), Active = true}, page)
+    UI.make("UIStroke", {Color = UI.line, Thickness = 1}, search)
+    UI.corner(search, 3)
+    UI.make("UIPadding", {PaddingLeft = UDim.new(0, 5)}, search)
     table.insert(Interactive, search)
-    connect(search:GetPropertyChangedSignal("Text"), function() refresh() end)
+    connect(search:GetPropertyChangedSignal("Text"), refresh)
+
     for _, rarity in ipairs(ORDER) do
         local items = POOLS[kind][rarity]
         if items then
             local group = UI.make("Frame", {Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
                 BackgroundTransparency = 1, LayoutOrder = UI.next()}, page)
-            UI.layout(group, 4)
-            local groupHeader = UI.make("Frame", {Size = UDim2.new(1, 0, 0, 32), BackgroundTransparency = 1,
+            UI.list(group, 1)
+            local head = UI.make("Frame", {Size = UDim2.new(1, 0, 0, UI.RAR), BackgroundColor3 = UI.row,
                 LayoutOrder = UI.next()}, group)
+            UI.corner(head, 3)
             local expanded = false
-            local function countSelected()
+            local function countOn()
                 local count = 0
                 for _, name in ipairs(items) do if CFG.Selected[kind][name] then count = count + 1 end end
                 return count
             end
-            local master, masterLabel, masterMark = UI.check(groupHeader, rarity,
-                function() return countSelected() == #items end,
-                function(enabled)
-                    for _, name in ipairs(items) do CFG.Selected[kind][name] = enabled end
-                    if enabled then expanded = true end
-                end, COLORS[rarity])
-            master.Size = UDim2.new(1, -35, 1, 0)
-            local caret = UI.button(groupHeader, ">", function() expanded = not expanded refresh() end)
-            caret.Size = UDim2.fromOffset(28, 32)
-            caret.Position = UDim2.new(1, -28, 0, 0)
+            local master, masterLabel = UI.check(head, rarity, function() return countOn() == #items end,
+                function(on)
+                    for _, name in ipairs(items) do CFG.Selected[kind][name] = on end
+                    if on then expanded = true end
+                end, RARITY_COLOR[rarity], UI.RAR)
+            master.Size = UDim2.new(1, -40, 1, 0)
+            masterLabel.TextSize = 10
+            masterLabel.Font = Enum.Font.GothamBold
+            local count = UI.text(head, "0/0", 8, UI.dim, 12)
+            count.Position = UDim2.new(1, -38, 0, 3)
+            count.Size = UDim2.fromOffset(20, 12)
+            count.TextXAlignment = Enum.TextXAlignment.Right
+            count.LayoutOrder = 0
+            local caret = UI.make("TextButton", {Text = "v", Font = Enum.Font.GothamBold, TextSize = 9,
+                TextColor3 = UI.dim, BackgroundTransparency = 1, Size = UDim2.fromOffset(15, UI.RAR),
+                Position = UDim2.new(1, -16, 0, 0), AutoButtonColor = false, Active = true}, head)
+            table.insert(Interactive, caret)
+            connect(caret.Activated, function() expanded = not expanded refresh() end)
             local grid = UI.make("Frame", {Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
-                BackgroundTransparency = 1, LayoutOrder = UI.next(), Visible = false}, group)
-            UI.make("UIGridLayout", {CellSize = UDim2.new(0.5, -3, 0, 32), CellPadding = UDim2.fromOffset(6, 5),
+                BackgroundTransparency = 1, Visible = false, LayoutOrder = UI.next()}, group)
+            UI.make("UIGridLayout", {CellSize = UDim2.new(0.5, -2, 0, UI.CELL), CellPadding = UDim2.fromOffset(3, 1),
                 SortOrder = Enum.SortOrder.LayoutOrder}, grid)
-            local itemButtons = {}
+            UI.make("UIPadding", {PaddingLeft = UDim.new(0, 3)}, grid)
+            local cells = {}
             for _, name in ipairs(items) do
-                local button = UI.check(grid, name, function() return CFG.Selected[kind][name] == true end,
-                    function(enabled) CFG.Selected[kind][name] = enabled end)
-                itemButtons[name] = button
+                local cell = UI.check(grid, name, function() return CFG.Selected[kind][name] == true end,
+                    function(on) CFG.Selected[kind][name] = on end)
+                cells[name] = cell
             end
             table.insert(Updates, function()
-                local count = countSelected()
-                masterLabel.Text = rarity .. "  " .. count .. "/" .. #items
-                if count > 0 and count < #items then
-                    masterMark.Text = "-"
-                    masterMark.BackgroundColor3 = Color3.fromRGB(93, 111, 82)
-                end
-                local query, matches = normalize(search.Text), 0
-                for name, button in pairs(itemButtons) do
+                local on = countOn()
+                count.Text = on .. "/" .. #items
+                local query = normalize(search.Text)
+                local matches = 0
+                for name, cell in pairs(cells) do
                     local match = query == "" or normalize(name):find(query, 1, true) ~= nil
-                    button.Visible = match
+                    cell.Visible = match
                     if match then matches = matches + 1 end
                 end
                 group.Visible = matches > 0
                 grid.Visible = expanded or query ~= ""
-                caret.Text = grid.Visible and "v" or ">"
+                caret.Text = grid.Visible and "^" or "v"
             end)
         end
     end
+    fitCanvas(page)
 end
 
-UI.section(Pages.Traits, "MONSTERS ONLY")
+UI.section(Pages.Traits, "monsters only")
 UI.toggle(Pages.Traits, "Mutation filter", function() return CFG.MutationOnly end, function(value) CFG.MutationOnly = value end)
 UI.toggle(Pages.Traits, "Any mutation", function() return CFG.AnyMutation end, function(value) CFG.AnyMutation = value end)
-UI.section(Pages.Traits, "SELECTED MUTATIONS")
+UI.section(Pages.Traits, "mutations")
 for _, mutation in ipairs(MUTATIONS) do
-    UI.toggle(Pages.Traits, mutation.name .. "  [" .. tostring(mutation.weight) .. "]",
-        function() return CFG.Mut[mutation.name] end, function(value) CFG.Mut[mutation.name] = value end)
+    UI.toggle(Pages.Traits, mutation.name, function() return CFG.Mut[mutation.name] end,
+        function(value) CFG.Mut[mutation.name] = value end)
+    local weight = UI.text(Pages.Traits, "weight " .. tostring(mutation.weight), 8, UI.dim, 10)
+    weight.TextXAlignment = Enum.TextXAlignment.Right
 end
+UI.section(Pages.Traits, "note")
+local note = UI.text(Pages.Traits, "Buildings never roll mutations. Weights are the values you supplied, not verified odds.", 8, UI.dim, 22)
+note.TextWrapped = true
+note.TextTruncate = Enum.TextTruncate.None
+fitCanvas(Pages.Traits)
 
 drawStatus = function()
-    if statusLabel.Parent then
+    if statusLabel and statusLabel.Parent then
         statusLabel.Text = S.message
-        statusLabel.TextColor3 = S.blocked and Color3.fromRGB(225, 184, 126) or UI.accent
+        statusLabel.TextColor3 = S.blocked and Color3.fromRGB(255, 179, 64) or UI.mint
     end
 end
+
 refresh = function()
     if not S.alive then return end
     for name, tab in pairs(TabButtons) do
-        tab.BackgroundColor3 = name == currentTab and Color3.fromRGB(49, 62, 42) or UI.row
-        tab.TextColor3 = name == currentTab and UI.accent or UI.muted
+        local on = name == currentTab
+        tab.BackgroundColor3 = on and Color3.fromRGB(43, 55, 78) or UI.row
+        tab.TextColor3 = on and UI.amber or UI.dim
     end
     for _, update in ipairs(Updates) do update() end
     drawStatus()
 end
 
-connect(minimize.Activated, function()
-    minimized = not minimized
-    tabBar.Visible = not minimized
-    content.Visible = not minimized
-    footer.Visible = not minimized
-    minimize.Text = minimized and "+" or "-"
-    if S.sizeTween then S.sizeTween:Cancel() end
-    S.sizeTween = TweenService:Create(main, TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-        {Size = UDim2.fromOffset(windowWidth, minimized and 49 or windowHeight)})
-    S.sizeTween:Play()
-end)
-
-local drag
 local function pointIn(point, object)
     local node = object
     while node and node ~= gui do
         if node:IsA("GuiObject") then
             if not node.Visible then return false end
             if node == object or node.ClipsDescendants then
-                local pos, size = node.AbsolutePosition, node.AbsoluteSize
-                if point.X < pos.X or point.Y < pos.Y or point.X > pos.X + size.X or point.Y > pos.Y + size.Y then return false end
+                local position, size = node.AbsolutePosition, node.AbsoluteSize
+                if point.X < position.X or point.Y < position.Y
+                    or point.X > position.X + size.X or point.Y > position.Y + size.Y then
+                    return false
+                end
             end
         end
         node = node.Parent
@@ -920,59 +1015,75 @@ local function pointIn(point, object)
     return node == gui
 end
 
+local function overInteractive(point)
+    for _, object in ipairs(Interactive) do
+        if object.Visible and object.Parent and pointIn(point, object) then return true end
+    end
+    return false
+end
+
+local drag = nil
 connect(UIS.InputBegan, function(input, processed)
     if input.KeyCode == Enum.KeyCode.RightControl and not UIS:GetFocusedTextBox() then
         main.Visible = not main.Visible
         drag = nil
-        for _, page in pairs(Pages) do page.ScrollingEnabled = true end
         return
     end
-    if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then return end
+    local isMouse = input.UserInputType == Enum.UserInputType.MouseButton1
+    local isTouch = input.UserInputType == Enum.UserInputType.Touch
+    if not isMouse and not isTouch then return end
+    if not main.Visible then return end
     local point = Vector2.new(input.Position.X, input.Position.Y)
-    if not main.Visible or not pointIn(point, main) then return end
-    for _, object in ipairs(Interactive) do if pointIn(point, object) then return end end
-    for _, page in pairs(Pages) do
-        if page.Visible and pointIn(point, page) and point.X > page.AbsolutePosition.X + page.AbsoluteSize.X - 13 then return end
-    end
-    drag = {point = point, center = main.AbsolutePosition + main.AbsoluteSize * 0.5,
-        touch = input.UserInputType == Enum.UserInputType.Touch and input or nil}
-    for _, page in pairs(Pages) do page.ScrollingEnabled = false end
+    if not pointIn(point, main) then return end
+    if overInteractive(point) then return end
+    if isTouch and (processed or not pointIn(point, header)) then return end
+    drag = {start = point, center = main.AbsolutePosition + main.AbsoluteSize * 0.5,
+        moved = false, touch = isTouch and input or nil}
 end)
 
 connect(UIS.InputChanged, function(input)
     if not drag then return end
-    if drag.touch and input ~= drag.touch then return end
-    if not drag.touch and input.UserInputType ~= Enum.UserInputType.MouseMovement then return end
-    local position = Vector2.new(input.Position.X, input.Position.Y)
-    local center = clampCenter(drag.center + position - drag.point)
+    if drag.touch then
+        if input ~= drag.touch then return end
+    elseif input.UserInputType ~= Enum.UserInputType.MouseMovement then
+        return
+    end
+    local point = Vector2.new(input.Position.X, input.Position.Y)
+    local delta = point - drag.start
+    if not drag.moved then
+        if delta.Magnitude < 4 then return end
+        drag.moved = true
+    end
+    local center = clampCenter(drag.center + delta)
     main.Position = UDim2.fromOffset(center.X, center.Y)
 end)
 
-connect(UIS.InputEnded, function(input)
-    if drag and (input.UserInputType == Enum.UserInputType.MouseButton1 or input == drag.touch) then
+local function endDrag(input)
+    if not drag then return end
+    if (drag.touch and input == drag.touch) or (not drag.touch and input.UserInputType == Enum.UserInputType.MouseButton1) then
         drag = nil
-        for _, page in pairs(Pages) do page.ScrollingEnabled = true end
     end
-end)
-
-connect(UIS.WindowFocusReleased, function()
-    drag = nil
-    for _, page in pairs(Pages) do page.ScrollingEnabled = true end
-end)
+end
+connect(UIS.InputEnded, endDrag)
+connect(UIS.WindowFocusReleased, function() drag = nil end)
 
 local cameraConnection
 local function bindCamera()
-    if cameraConnection then cameraConnection:Disconnect() end
+    if cameraConnection then pcall(function() cameraConnection:Disconnect() end) end
     local camera = workspace.CurrentCamera
-    if camera then cameraConnection = connect(camera:GetPropertyChangedSignal("ViewportSize"), function() fit(false) end) end
+    if camera then
+        cameraConnection = connect(camera:GetPropertyChangedSignal("ViewportSize"), function() fit(false) end)
+    end
     fit(false)
 end
 connect(workspace:GetPropertyChangedSignal("CurrentCamera"), bindCamera)
 connect(LP.Idled, idlePulse)
 connect(LP.CharacterRemoving, function()
-    if S.running then pause("Character removed. Offers kept; Start after respawning.") end
+    if S.running then pause("character removed | offers kept") end
 end)
 connect(gui.Destroying, Runtime.Stop)
+
+applySize()
 bindCamera()
 fit(true)
 refresh()
@@ -985,10 +1096,12 @@ task.spawn(function()
             S.busy = false
             if not ok and S.alive then
                 for _, record in pairs(Records) do
-                    if #record.pending > 0 then S.blocked = {record = record, target = record.pending[1]} break end
+                    if #record.pending > 0 then
+                        S.blocked = {record = record, target = record.pending[1]}
+                        break
+                    end
                 end
-                pause("Worker paused: " .. tostring(problem))
-                warn("AutoRoll: " .. tostring(problem))
+                pause("worker paused | " .. tostring(problem))
             end
             task.wait(0.03)
         else
