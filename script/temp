@@ -629,6 +629,28 @@ end
 buildPool("Buildings")
 buildPool("Monsters")
 
+-- auto-select all buildings
+CFG.Buildings = true
+
+for rarity, items in pairs(POOLS.Buildings) do
+    CFG.Rar.Buildings[rarity] = true
+
+    for _, item in ipairs(items) do
+        CFG.Want.Buildings[rarity][item] = true
+    end
+end
+
+-- auto-select mythic, legendary, and secret monsters
+for _, rarity in ipairs({"Mythic", "Legendary", "Secret"}) do
+    CFG.Rar.Monsters[rarity] = true
+
+    for _, item in ipairs(POOLS.Monsters[rarity] or {}) do
+        CFG.Want.Monsters[rarity][item] = true
+    end
+end
+
+CFG.Monsters = true
+
 local spacer = Instance.new("Frame")
 spacer.Size = UDim2.new(1, 0, 0, 6)
 spacer.BackgroundTransparency = 1
