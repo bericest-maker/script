@@ -2,6 +2,7 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
 local VU = game:GetService("VirtualUser")
+local GS = game:GetService("GuiService")
 local LP = Players.LocalPlayer
 
 local POOLS = {
@@ -54,6 +55,8 @@ BuyWait = 0.05,
 TPHeight = 2.8,
 RequireMut = false,
 AnyMonsterMut = false,
+RebuySame = false,
+RebuyCd = 3,
 Want = {Buildings = {}, Monsters = {}},
 Mut = {},
 }
@@ -80,6 +83,30 @@ end
 table.sort(SORTED[kind], function(a, b) return #a.key > #b.key end)
 end
 for _, m in ipairs(MUTATIONS) do CFG.Mut[m.name] = false end
+
+local SPENT = {}
+local STATS = {bought = 0, rolls = 0}
+
+local function makeKey(kind, dName, raw, mut)
+return kind .. "|" .. dName .. "|" .. clean(raw) .. "|" .. (mut or "")
+end
+
+local function isLocked(key)
+local e = SPENT[key]
+if not e then return false end
+if e.ok then
+if CFG.RebuySame and (os.clock() - e.t) >= CFG.RebuyCd then return false end
+return true
+end
+return os.clock() < (e.t + 1)
+end
+
+local function clearSpent(kind)
+local prefix = kind .. "|"
+for k in pairs(SPENT) do
+if k:sub(1, #prefix) == prefix then SPENT[k] = nil end
+end
+end
 
 local function char() return LP.Character or LP.CharacterAdded:Wait() end
 local function hrp()
@@ -121,7 +148,7 @@ end
 local function detectPlot()
 local r = getRollers()
 local root = hrp()
-if not (r and root) then return end
+if not (r and root) then return false end
 local bestPlot, bestDist = nil, math.huge
 for i = 1, 8 do
 local m = r:FindFirstChild("Plot" .. i .. "_Monsters") or r:FindFirstChild("Plot" .. i .. "_Buildings")
@@ -135,6 +162,7 @@ end
 end
 end
 if bestPlot then CFG.Plot = bestPlot end
+return bestPlot ~= nil
 end
 pcall(detectPlot)
 
@@ -243,26 +271,31 @@ end
 end)
 end
 
-local function buyDisplay(kind, display, tag)
+local function buyDisplay(kind, display, key, tag)
 local prompt = display:FindFirstChild("BuyPrompt") or findDeep(display, "BuyPrompt")
-if not (prompt and prompt:IsA("ProximityPrompt")) then return false end
+if not (prompt and prompt:IsA("ProximityPrompt")) then
+SPENT[key] = {t = os.clock(), ok = true}
+log("!prompt " .. tag)
+return false
+end
 local ppos = pivotOf(prompt)
 tpTo(ppos, false)
 task.wait(CFG.BuyWait)
 local before = txtOf(findDeep(display, "ItemName")) or ""
-for attempt = 1, 6 do
-if not prompt.Parent or not prompt.Enabled then break end
+local wasEnabled = prompt.Enabled
+local confirmed = false
+for attempt = 1, 3 do
+if not prompt.Parent then confirmed = true break end
 tpTo(ppos, true)
 firePrompt(prompt)
-task.wait(math.max(CFG.BuyWait, 0.06))
-local after = txtOf(findDeep(display, "ItemName")) or ""
-if after ~= before or after == "" then
-log("+" .. tag)
-return true
+task.wait(0.07)
+if not prompt.Parent then confirmed = true break end
+if prompt.Enabled ~= wasEnabled then confirmed = true break end
+if (txtOf(findDeep(display, "ItemName")) or "") ~= before then confirmed = true break end
 end
-if attempt >= 2 then task.wait(0.06) end
-end
-log("+" .. tag)
+SPENT[key] = {t = os.clock(), ok = confirmed}
+if confirmed then STATS.bought = STATS.bought + 1 end
+log((confirmed and "+" or "?") .. tag .. "  B" .. STATS.bought .. " R" .. STATS.rolls)
 return true
 end
 
@@ -278,21 +311,18 @@ end
 local function checkAndBuyAll(kind)
 local roller = getRoller(kind)
 if not roller then return false end
-local displays = getDisplays(roller)
-local pending = {}
-for _, d in ipairs(displays) do
-local info, mut = readDisplay(kind, d)
+local acted = false
+for _, d in ipairs(getDisplays(roller)) do
+local info, mut, raw = readDisplay(kind, d)
 if info and wanted(kind, info, mut) then
-table.insert(pending, {d = d, tag = (mut and (mut .. " ") or "") .. info.name})
+local key = makeKey(kind, d.Name, raw, mut)
+if not isLocked(key) then
+local tag = (mut and (mut .. " ") or "") .. info.name
+if buyDisplay(kind, d, key, tag) then acted = true end
 end
 end
-if #pending == 0 then return false end
-local rpos = pivotOf(roller:FindFirstChild("RollButton") or roller)
-for _, p in ipairs(pending) do
-buyDisplay(kind, p.d, p.tag)
 end
-if rpos then tpTo(rpos, true) end
-return true
+return acted
 end
 
 local function fireRoll(kind)
@@ -316,6 +346,8 @@ task.wait(0.03)
 fireclickdetector(cd, 0)
 end
 end)
+clearSpent(kind)
+STATS.rolls = STATS.rolls + 1
 return true
 end
 
@@ -357,10 +389,12 @@ if bought then
 task.wait(0.08)
 else
 local t0 = os.clock()
+local rolled = false
 for _, k in ipairs(kinds) do
 if not running then break end
-fireRoll(k)
+if fireRoll(k) then rolled = true end
 end
+if rolled then
 local firstRoller = getRoller(kinds[1])
 local firstBtn = firstRoller and (firstRoller:FindFirstChild("RollButton") or firstRoller)
 local rem = CFG.RollDelay - (os.clock() - t0)
@@ -374,6 +408,9 @@ end
 for _, k in ipairs(kinds) do
 if not running then break end
 checkAndBuyAll(k)
+end
+else
+task.wait(0.4)
 end
 end
 end
@@ -510,6 +547,7 @@ pageUpdaters[name] = upd
 return p
 end
 
+local mini
 local xOff = 3
 for _, info in ipairs(TAB_LIST) do
 local name = info.id
@@ -534,6 +572,7 @@ activeTab = name
 if minimized then
 minimized = false
 main.Size = UDim2.fromOffset(BASE_W, BASE_H)
+mini.Text = "-"
 end
 for n, t in pairs(tabs) do
 local on = (n == name)
@@ -545,7 +584,7 @@ pageUpdaters[name]()
 end)
 end
 
-local mini = Instance.new("TextButton")
+mini = Instance.new("TextButton")
 mini.Size = UDim2.fromOffset(19, 16)
 mini.Position = UDim2.new(1, -22, 0, 3)
 mini.BackgroundColor3 = Color3.fromRGB(40, 44, 62)
@@ -715,8 +754,8 @@ holder.Parent = p
 corner(holder, 4)
 
 local lbl = Instance.new("TextLabel")
-lbl.Size = UDim2.fromOffset(28, 21)
-lbl.Position = UDim2.fromOffset(6, 0)
+lbl.Size = UDim2.fromOffset(26, 21)
+lbl.Position = UDim2.fromOffset(5, 0)
 lbl.BackgroundTransparency = 1
 lbl.Font = Enum.Font.GothamSemibold
 lbl.TextSize = 9
@@ -733,8 +772,8 @@ end
 end
 for i = 1, 8 do
 local b = Instance.new("TextButton")
-b.Size = UDim2.new(0, 21, 0, 15)
-b.Position = UDim2.fromOffset(33 + (i - 1) * 23, 3)
+b.Size = UDim2.fromOffset(20, 15)
+b.Position = UDim2.fromOffset(31 + (i - 1) * 22, 3)
 b.BorderSizePixel = 0
 b.AutoButtonColor = false
 b.Font = Enum.Font.GothamBold
@@ -750,6 +789,29 @@ CFG.Plot = i
 paint()
 end)
 end
+
+local auto = Instance.new("TextButton")
+auto.Size = UDim2.fromOffset(19, 15)
+auto.Position = UDim2.new(1, -22, 0, 3)
+auto.BackgroundColor3 = Color3.fromRGB(52, 44, 32)
+auto.BorderSizePixel = 0
+auto.AutoButtonColor = false
+auto.Font = Enum.Font.GothamBold
+auto.TextSize = 9
+auto.TextColor3 = Color3.fromRGB(232, 194, 106)
+auto.Text = "A"
+auto.Parent = holder
+corner(auto, 3)
+auto.MouseButton1Click:Connect(function()
+if suppressClick then return end
+if detectPlot() then
+paint()
+log("plot " .. CFG.Plot)
+else
+log("!plot")
+end
+end)
+
 paint()
 return paint
 end
@@ -928,9 +990,14 @@ running = v
 log(v and "on" or "idle")
 end, Color3.fromRGB(255, 220, 110))
 
+toggleRow(pages.Main, "Rebuy Same Offer", false, function(v)
+CFG.RebuySame = v
+end, Color3.fromRGB(232, 194, 106))
+
 plotRow(pages.Main)
 sliderRow(pages.Main, "Roll Wait", 0.5, 4.0, CFG.RollDelay, 0.1, function(v) CFG.RollDelay = v end)
 sliderRow(pages.Main, "Buy Speed", 0.02, 0.35, CFG.BuyWait, 0.01, function(v) CFG.BuyWait = v end)
+sliderRow(pages.Main, "Rebuy Cd", 0.5, 10, CFG.RebuyCd, 0.5, function(v) CFG.RebuyCd = v end)
 
 local statusBox = Instance.new("Frame")
 statusBox.Size = UDim2.new(1, 0, 0, 22)
@@ -1018,8 +1085,8 @@ do
 local dragPending, dragging, dragStart, startPos = false, false, nil, nil
 local function pointerOf(i)
 if i.UserInputType == Enum.UserInputType.Touch then
-local gs = game:GetService("GuiService"):GetGuiInset()
-return Vector2.new(i.Position.X + gs.X, i.Position.Y + gs.Y)
+local ok, ins = pcall(function() return GS:GetGuiInset() end)
+if ok and ins then return Vector2.new(i.Position.X + ins.X, i.Position.Y + ins.Y) end
 end
 return UIS:GetMouseLocation()
 end
