@@ -1,7 +1,9 @@
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
-local TweenService = game:GetService("TweenService")
+local VU = game:GetService("VirtualUser")
+local TS = game:GetService("TweenService")
 local LP = Players.LocalPlayer
+local CAM = workspace.CurrentCamera
 
 local POOLS = {
 Buildings = {
@@ -49,12 +51,11 @@ Plot = 2,
 Buildings = false,
 Monsters = false,
 RollDelay = 1.5,
-BuyDelay = 0.3,
+BuyWait = 0.06,
 TPHeight = 3,
 MutationOnly = false,
 AnyMutation = false,
 Want = {Buildings = {}, Monsters = {}},
-Rar = {Buildings = {}, Monsters = {}},
 Mut = {},
 }
 
@@ -68,8 +69,8 @@ end
 
 local LOOKUP = {Buildings = {}, Monsters = {}}
 for kind, pool in pairs(POOLS) do
+CFG.Want[kind] = {}
 for rar, items in pairs(pool) do
-CFG.Rar[kind][rar] = false
 CFG.Want[kind][rar] = {}
 for _, it in ipairs(items) do
 CFG.Want[kind][rar][it] = false
@@ -99,7 +100,6 @@ if inst:IsA("Model") then
 local ok, cf = pcall(function() return inst:GetPivot() end)
 if ok then return cf.Position end
 end
-if inst:IsA("ProximityPrompt") or inst:IsA("ClickDetector") then
 local p = inst.Parent
 while p and p ~= workspace do
 if p:IsA("BasePart") then return p.Position end
@@ -109,17 +109,8 @@ if ok then return cf.Position end
 end
 p = p.Parent
 end
-end
 local bp = inst:FindFirstChildWhichIsA("BasePart", true)
-if bp then return bp.Position end
-local par = inst.Parent
-while par and par ~= workspace do
-if par:IsA("BasePart") then return par.Position end
-local pp = par:FindFirstChildWhichIsA("BasePart", true)
-if pp then return pp.Position end
-par = par.Parent
-end
-return nil
+return bp and bp.Position or nil
 end
 
 local function tpTo(pos)
@@ -127,8 +118,8 @@ if not pos then return false end
 local root = hrp()
 if not root then return false end
 root.AssemblyLinearVelocity = Vector3.zero
+root.AssemblyAngularVelocity = Vector3.zero
 root.CFrame = CFrame.new(pos + Vector3.new(0, CFG.TPHeight, 0))
-task.wait(0.15)
 return true
 end
 
@@ -154,22 +145,20 @@ local function log(t) if LOG then LOG.Text = tostring(t) end end
 local function readDisplay(kind, display)
 local rawItem = txtOf(findDeep(display, "ItemName")) or ""
 local rawRar = txtOf(findDeep(display, "Rarity")) or ""
-local mut = nil
 local mutLabel = txtOf(findDeep(display, "Mutation"))
 local hay = ((mutLabel or "") .. " " .. rawItem .. " " .. rawRar):lower()
+local mut = nil
 for _, m in ipairs(MUTATIONS) do
 if hay:find(m.name:lower(), 1, true) then mut = m.name break end
 end
 local cItem = clean(rawItem)
-local found = nil
-if LOOKUP[kind][cItem] then
-found = LOOKUP[kind][cItem]
-else
-local bestLen = 0
+local found = LOOKUP[kind][cItem]
+if not found then
+local best = 0
 for key, info in pairs(LOOKUP[kind]) do
-if #key > bestLen and cItem:find(key, 1, true) then
+if #key > best and cItem:find(key, 1, true) then
 found = info
-bestLen = #key
+best = #key
 end
 end
 end
@@ -178,7 +167,8 @@ end
 
 local function wanted(kind, info, mut)
 if not info then return false end
-if not CFG.Want[kind][info.rarity] or not CFG.Want[kind][info.rarity][info.name] then return false end
+local t = CFG.Want[kind] and CFG.Want[kind][info.rarity]
+if not (t and t[info.name]) then return false end
 if kind == "Monsters" and CFG.MutationOnly then
 if CFG.AnyMutation then return mut ~= nil end
 if not mut then return false end
@@ -193,33 +183,25 @@ if fireproximityprompt then
 fireproximityprompt(prompt)
 else
 prompt:InputHoldBegin()
-task.wait((prompt.HoldDuration or 0) + 0.1)
+task.wait((prompt.HoldDuration or 0) + 0.05)
 prompt:InputHoldEnd()
 end
 end)
 end
 
-local function buyDisplay(kind, display, name)
+local function buyDisplay(display, name)
 local prompt = findDeep(display, "BuyPrompt")
-if not (prompt and prompt:IsA("ProximityPrompt")) then
-log("no prompt " .. display.Name)
-return false
-end
+if not (prompt and prompt:IsA("ProximityPrompt")) then return false end
 tpTo(pivotOf(prompt))
-task.wait(0.25)
+task.wait(CFG.BuyWait)
 local before = txtOf(findDeep(display, "ItemName")) or ""
-for attempt = 1, 3 do
 firePrompt(prompt)
-task.wait(0.4)
-local after = txtOf(findDeep(display, "ItemName")) or ""
-if after ~= before or after == "" then
-log("BOUGHT " .. name)
-task.wait(CFG.BuyDelay)
-return true
+task.wait(CFG.BuyWait + 0.04)
+if (txtOf(findDeep(display, "ItemName")) or "") == before then
+firePrompt(prompt)
+task.wait(0.12)
 end
-end
-log("buy? " .. name)
-task.wait(CFG.BuyDelay)
+log("B " .. name)
 return true
 end
 
@@ -232,11 +214,24 @@ table.sort(out, function(a, b) return a.Name < b.Name end)
 return out
 end
 
+local function scan(kind, roller)
+if not roller then return false end
+local bought = false
+for _, display in ipairs(getDisplays(roller)) do
+local info, mut = readDisplay(kind, display)
+if info and wanted(kind, info, mut) then
+buyDisplay(display, (mut and (mut .. " ") or "") .. info.name)
+bought = true
+end
+end
+return bought
+end
+
 local function fireRoll(kind)
 local roller = getRoller(kind)
 if not roller then
 log("no roller Plot" .. CFG.Plot .. "_" .. kind)
-return nil
+return
 end
 local btn = roller:FindFirstChild("RollButton") or findDeep(roller, "RollButton")
 local cd = nil
@@ -246,43 +241,41 @@ end
 if not cd then cd = roller:FindFirstChildWhichIsA("ClickDetector", true) end
 if not cd then
 log("no RollClick " .. kind)
-return nil
+return
 end
 tpTo(pivotOf(btn or cd))
-task.wait(0.1)
+task.wait(0.05)
 pcall(function()
 if fireclickdetector then
 fireclickdetector(cd)
-task.wait(0.05)
+task.wait(0.03)
 fireclickdetector(cd, 0)
 end
 end)
-return roller
 end
 
-local function checkAndBuy(kind, roller)
-if not roller then return end
-local seen = {}
-for _, display in ipairs(getDisplays(roller)) do
-local info, mut, raw = readDisplay(kind, display)
-if info then
-table.insert(seen, (mut and (mut .. " ") or "") .. info.name)
-if wanted(kind, info, mut) then
-buyDisplay(kind, display, (mut and (mut .. " ") or "") .. info.name)
+task.spawn(function()
+while true do
+task.wait(20)
+pcall(function()
+VU:CaptureController()
+VU:ClickButton2(Vector2.new(0, 0))
+end)
 end
-elseif raw ~= "" then
-table.insert(seen, "?" .. raw)
-end
-end
-if #seen > 0 then
-log(kind:sub(1, 1) .. ": " .. table.concat(seen, ", "))
-end
-end
+end)
+pcall(function()
+LP.Idled:Connect(function()
+pcall(function()
+VU:CaptureController()
+VU:ClickButton2(Vector2.new(0, 0))
+end)
+end)
+end)
 
 local running = false
 task.spawn(function()
 while true do
-task.wait(0.1)
+task.wait(0.05)
 if running then
 local kinds = {}
 if CFG.Monsters then table.insert(kinds, "Monsters") end
@@ -290,15 +283,25 @@ if CFG.Buildings then table.insert(kinds, "Buildings") end
 if #kinds == 0 then
 task.wait(0.4)
 else
-local rolled = {}
+local boughtAny = false
 for _, k in ipairs(kinds) do
-local ok, r = pcall(fireRoll, k)
-rolled[k] = ok and r or nil
+if not running then break end
+local roller = getRoller(k)
+if scan(k, roller) then boughtAny = true end
+end
+if boughtAny then
+task.wait(0.15)
+for _, k in ipairs(kinds) do scan(k, getRoller(k)) end
+else
+for _, k in ipairs(kinds) do
+if not running then break end
+fireRoll(k)
 end
 task.wait(CFG.RollDelay)
 for _, k in ipairs(kinds) do
 if not running then break end
-pcall(checkAndBuy, k, rolled[k])
+scan(k, getRoller(k))
+end
 end
 end
 end
@@ -328,14 +331,25 @@ return s
 end
 
 local main = Instance.new("Frame")
-main.Size = UDim2.fromOffset(300, 390)
-main.Position = UDim2.new(0, 40, 0.5, -195)
 main.BackgroundColor3 = Color3.fromRGB(16, 17, 24)
 main.BorderSizePixel = 0
 main.Active = true
+main.ClipsDescendants = true
 main.Parent = gui
 corner(main, 8)
 stroke(main, Color3.fromRGB(55, 58, 80))
+
+local function fit()
+local vs = CAM.ViewportSize
+local w = math.clamp(math.floor(vs.X * 0.32), 300, 430)
+local h = math.clamp(math.floor(vs.Y * 0.84), 400, 760)
+main.Size = UDim2.fromOffset(w, h)
+main.Position = UDim2.new(0.5, -math.floor(w / 2), 0.5, -math.floor(h / 2))
+end
+fit()
+pcall(function()
+CAM:GetPropertyChangedSignal("ViewportSize"):Connect(fit)
+end)
 
 local bar = Instance.new("Frame")
 bar.Size = UDim2.new(1, 0, 0, 26)
@@ -366,26 +380,72 @@ mini.TextColor3 = Color3.fromRGB(220, 220, 235)
 mini.Parent = bar
 corner(mini, 5)
 
-local scroll = Instance.new("ScrollingFrame")
-scroll.Size = UDim2.new(1, -10, 1, -34)
-scroll.Position = UDim2.fromOffset(5, 30)
-scroll.BackgroundTransparency = 1
-scroll.BorderSizePixel = 0
-scroll.ScrollBarThickness = 3
-scroll.ScrollBarImageColor3 = Color3.fromRGB(90, 95, 130)
-scroll.CanvasSize = UDim2.new()
-scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
-scroll.Parent = main
+local tabbar = Instance.new("Frame")
+tabbar.Size = UDim2.new(1, -10, 0, 22)
+tabbar.Position = UDim2.fromOffset(5, 30)
+tabbar.BackgroundTransparency = 1
+tabbar.Parent = main
 
-local list = Instance.new("UIListLayout")
-list.Padding = UDim.new(0, 3)
-list.SortOrder = Enum.SortOrder.LayoutOrder
-list.Parent = scroll
+local tabs = {}
+local pages = {}
+local activeTab = "MAIN"
 
-local order = 0
-local function nextOrder() order = order + 1 return order end
+local function makePage(name)
+local p = Instance.new("ScrollingFrame")
+p.Name = name
+p.Size = UDim2.new(1, -10, 1, -58)
+p.Position = UDim2.fromOffset(5, 55)
+p.BackgroundTransparency = 1
+p.BorderSizePixel = 0
+p.ScrollBarThickness = 3
+p.ScrollBarImageColor3 = Color3.fromRGB(90, 95, 130)
+p.CanvasSize = UDim2.new()
+p.AutomaticCanvasSize = Enum.AutomaticSize.Y
+p.Visible = false
+p.Parent = main
+local l = Instance.new("UIListLayout")
+l.Padding = UDim.new(0, 3)
+l.SortOrder = Enum.SortOrder.LayoutOrder
+l.Parent = p
+pages[name] = p
+return p
+end
 
-local function header(text, col)
+for i, name in ipairs({"MAIN", "MONSTERS", "BUILDINGS", "TRAITS"}) do
+makePage(name)
+local b = Instance.new("TextButton")
+b.Size = UDim2.new(0.25, -3, 1, 0)
+b.Position = UDim2.new((i - 1) * 0.25, (i - 1) * 4, 0, 0)
+b.BackgroundColor3 = Color3.fromRGB(28, 31, 44)
+b.BorderSizePixel = 0
+b.Font = Enum.Font.GothamBold
+b.TextSize = 10
+b.Text = name
+b.TextColor3 = Color3.fromRGB(150, 155, 180)
+b.AutoButtonColor = false
+b.Parent = tabbar
+corner(b, 5)
+tabs[name] = b
+b.MouseButton1Click:Connect(function()
+activeTab = name
+for n, t in pairs(tabs) do
+t.BackgroundColor3 = (n == name) and Color3.fromRGB(95, 130, 255) or Color3.fromRGB(28, 31, 44)
+t.TextColor3 = (n == name) and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(150, 155, 180)
+pages[n].Visible = (n == name)
+end
+end)
+end
+tabs.MAIN.BackgroundColor3 = Color3.fromRGB(95, 130, 255)
+tabs.MAIN.TextColor3 = Color3.fromRGB(255, 255, 255)
+pages.MAIN.Visible = true
+
+local order = {}
+local function nextOrder(p)
+order[p] = (order[p] or 0) + 1
+return order[p]
+end
+
+local function header(p, text, col)
 local f = Instance.new("TextLabel")
 f.Size = UDim2.new(1, 0, 0, 18)
 f.BackgroundColor3 = Color3.fromRGB(26, 28, 40)
@@ -395,21 +455,21 @@ f.TextSize = 11
 f.TextColor3 = col or Color3.fromRGB(150, 155, 180)
 f.Text = "  " .. text
 f.TextXAlignment = Enum.TextXAlignment.Left
-f.LayoutOrder = nextOrder()
-f.Parent = scroll
+f.LayoutOrder = nextOrder(p)
+f.Parent = p
 corner(f, 4)
 return f
 end
 
-local function toggle(text, default, callback, indent, color)
+local function toggle(p, text, default, callback, indent, color)
 local b = Instance.new("TextButton")
 b.Size = UDim2.new(1, 0, 0, 20)
 b.BackgroundColor3 = Color3.fromRGB(22, 24, 33)
 b.BorderSizePixel = 0
 b.AutoButtonColor = false
 b.Text = ""
-b.LayoutOrder = nextOrder()
-b.Parent = scroll
+b.LayoutOrder = nextOrder(p)
+b.Parent = p
 corner(b, 4)
 
 local lbl = Instance.new("TextLabel")
@@ -459,13 +519,75 @@ paint()
 return api
 end
 
-local function slider(text, min, max, default, step, callback)
+local function chipGrid(p, names, color, onToggle)
+local rows = math.ceil(#names / 2)
+local holder = Instance.new("Frame")
+holder.Size = UDim2.new(1, 0, 0, rows * 19 + 2)
+holder.BackgroundTransparency = 1
+holder.LayoutOrder = nextOrder(p)
+holder.Parent = p
+local out = {}
+for i, name in ipairs(names) do
+local col = (i - 1) % 2
+local row = math.floor((i - 1) / 2)
+local b = Instance.new("TextButton")
+b.Size = UDim2.new(0.5, -3, 0, 17)
+b.Position = UDim2.new(col * 0.5, col * 6, 0, row * 19)
+b.BackgroundColor3 = Color3.fromRGB(24, 27, 38)
+b.BorderSizePixel = 0
+b.AutoButtonColor = false
+b.Text = ""
+b.Parent = holder
+corner(b, 4)
+local lbl = Instance.new("TextLabel")
+lbl.Size = UDim2.new(1, -22, 1, 0)
+lbl.Position = UDim2.fromOffset(5, 0)
+lbl.BackgroundTransparency = 1
+lbl.Font = Enum.Font.Gotham
+lbl.TextSize = 9
+lbl.TextXAlignment = Enum.TextXAlignment.Left
+lbl.TextTruncate = Enum.TextTruncate.AtEnd
+lbl.TextColor3 = color or Color3.fromRGB(175, 180, 200)
+lbl.Text = name
+lbl.Parent = b
+local box = Instance.new("Frame")
+box.Size = UDim2.fromOffset(11, 11)
+box.Position = UDim2.new(1, -15, 0.5, -5.5)
+box.BackgroundColor3 = Color3.fromRGB(38, 41, 55)
+box.BorderSizePixel = 0
+box.Parent = b
+corner(box, 3)
+local dot = Instance.new("Frame")
+dot.Size = UDim2.fromScale(1, 1)
+dot.BackgroundColor3 = Color3.fromRGB(95, 130, 255)
+dot.BackgroundTransparency = 1
+dot.BorderSizePixel = 0
+dot.Parent = box
+corner(dot, 3)
+local state = false
+local api = {}
+function api.Set(v, fire)
+state = v and true or false
+dot.BackgroundTransparency = state and 0 or 1
+lbl.TextTransparency = state and 0 or 0.3
+if fire ~= false and onToggle then onToggle(name, state) end
+end
+function api.SetVisible(v) b.Visible = v end
+b.MouseButton1Click:Connect(function() api.Set(not state) end)
+b.MouseEnter:Connect(function() b.BackgroundColor3 = Color3.fromRGB(34, 38, 52) end)
+b.MouseLeave:Connect(function() b.BackgroundColor3 = Color3.fromRGB(24, 27, 38) end)
+out[name] = api
+end
+return out
+end
+
+local function slider(p, text, min, max, default, step, callback)
 local holder = Instance.new("Frame")
 holder.Size = UDim2.new(1, 0, 0, 30)
 holder.BackgroundColor3 = Color3.fromRGB(22, 24, 33)
 holder.BorderSizePixel = 0
-holder.LayoutOrder = nextOrder()
-holder.Parent = scroll
+holder.LayoutOrder = nextOrder(p)
+holder.Parent = p
 corner(holder, 4)
 
 local lbl = Instance.new("TextLabel")
@@ -496,7 +618,7 @@ corner(fill, 3)
 
 local dragging = false
 local function setFromX(x)
-local rel = math.clamp((x - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
+local rel = math.clamp((x - track.AbsolutePosition.X) / math.max(track.AbsoluteSize.X, 1), 0, 1)
 local val = min + (max - min) * rel
 val = math.floor(val / step + 0.5) * step
 val = math.clamp(val, min, max)
@@ -519,17 +641,17 @@ end
 end)
 end
 
-local function plotRow()
+local function plotRow(p)
 local holder = Instance.new("Frame")
 holder.Size = UDim2.new(1, 0, 0, 24)
 holder.BackgroundColor3 = Color3.fromRGB(22, 24, 33)
 holder.BorderSizePixel = 0
-holder.LayoutOrder = nextOrder()
-holder.Parent = scroll
+holder.LayoutOrder = nextOrder(p)
+holder.Parent = p
 corner(holder, 4)
 
 local lbl = Instance.new("TextLabel")
-lbl.Size = UDim2.fromOffset(40, 24)
+lbl.Size = UDim2.fromOffset(36, 24)
 lbl.Position = UDim2.fromOffset(8, 0)
 lbl.BackgroundTransparency = 1
 lbl.Font = Enum.Font.Gotham
@@ -542,8 +664,8 @@ lbl.Parent = holder
 local btns = {}
 for i = 1, 8 do
 local b = Instance.new("TextButton")
-b.Size = UDim2.fromOffset(26, 16)
-b.Position = UDim2.fromOffset(38 + (i - 1) * 30, 4)
+b.Size = UDim2.new(0.125, -4, 0, 16)
+b.Position = UDim2.new(0.125 * (i - 1) + 0.125, (i - 1) * 3, 0, 4)
 b.BackgroundColor3 = Color3.fromRGB(38, 41, 55)
 b.BorderSizePixel = 0
 b.Font = Enum.Font.GothamBold
@@ -565,20 +687,41 @@ o.BackgroundColor3 = (j == CFG.Plot) and Color3.fromRGB(95, 130, 255) or Color3.
 end
 end
 
-header("MAIN")
-toggle("Auto Roll", false, function(v) running = v log(v and "running" or "idle") end, 0, Color3.fromRGB(120, 230, 160))
-toggle("Buildings", false, function(v) CFG.Buildings = v end)
-toggle("Monsters", false, function(v) CFG.Monsters = v end)
-plotRow()
-slider("Roll Delay", 0.5, 4, CFG.RollDelay, 0.1, function(v) CFG.RollDelay = v end)
-slider("Buy Delay", 0.05, 1, CFG.BuyDelay, 0.05, function(v) CFG.BuyDelay = v end)
+local function poolSection(kind, p)
+toggle(p, kind .. " Rolling", CFG[kind], function(v)
+CFG[kind] = v
+end, 0, kind == "Monsters" and Color3.fromRGB(120, 230, 160) or Color3.fromRGB(120, 190, 255))
+for _, rar in ipairs(RARITY_ORDER) do
+local items = POOLS[kind][rar]
+if items then
+header(p, rar, RARITY_COLOR[rar])
+local chips = chipGrid(p, items, RARITY_COLOR[rar], function(name, v)
+CFG.Want[kind][rar][name] = v
+end)
+toggle(p, "all " .. rar, false, function(v)
+for _, item in ipairs(items) do
+chips[item].Set(v, false)
+CFG.Want[kind][rar][item] = v
+end
+end, 0, RARITY_COLOR[rar])
+end
+end
+end
+
+header(pages.MAIN, "MAIN")
+toggle(pages.MAIN, "Auto Roll", false, function(v) running = v log(v and "running" or "idle") end, 0, Color3.fromRGB(120, 230, 160))
+toggle(pages.MAIN, "Buildings", false, function(v) CFG.Buildings = v end)
+toggle(pages.MAIN, "Monsters", false, function(v) CFG.Monsters = v end)
+plotRow(pages.MAIN)
+slider(pages.MAIN, "Roll Delay", 0.5, 4, CFG.RollDelay, 0.1, function(v) CFG.RollDelay = v end)
+slider(pages.MAIN, "Buy Speed", 0.02, 0.4, CFG.BuyWait, 0.01, function(v) CFG.BuyWait = v end)
 
 local statusHolder = Instance.new("Frame")
-statusHolder.Size = UDim2.new(1, 0, 0, 30)
+statusHolder.Size = UDim2.new(1, 0, 0, 34)
 statusHolder.BackgroundColor3 = Color3.fromRGB(20, 22, 30)
 statusHolder.BorderSizePixel = 0
-statusHolder.LayoutOrder = nextOrder()
-statusHolder.Parent = scroll
+statusHolder.LayoutOrder = nextOrder(pages.MAIN)
+statusHolder.Parent = pages.MAIN
 corner(statusHolder, 4)
 LOG = Instance.new("TextLabel")
 LOG.Size = UDim2.new(1, -12, 1, 0)
@@ -587,59 +730,50 @@ LOG.BackgroundTransparency = 1
 LOG.Font = Enum.Font.Code
 LOG.TextSize = 9
 LOG.TextWrapped = true
+LOG.TextYAlignment = Enum.TextYAlignment.Top
 LOG.TextXAlignment = Enum.TextXAlignment.Left
 LOG.TextColor3 = Color3.fromRGB(120, 200, 255)
 LOG.Text = "idle"
 LOG.Parent = statusHolder
 
-header("MUTATIONS")
-toggle("Mutation Only", false, function(v) CFG.MutationOnly = v end, 0, Color3.fromRGB(255, 200, 110))
-toggle("Any Mutation", false, function(v) CFG.AnyMutation = v end, 0, Color3.fromRGB(255, 200, 110))
+poolSection("Monsters", pages.MONSTERS)
+poolSection("Buildings", pages.BUILDINGS)
+
+header(pages.TRAITS, "MUTATIONS")
+toggle(pages.TRAITS, "Mutation Only", false, function(v) CFG.MutationOnly = v end, 0, Color3.fromRGB(255, 200, 110))
+toggle(pages.TRAITS, "Any Mutation", false, function(v) CFG.AnyMutation = v end, 0, Color3.fromRGB(255, 200, 110))
+local mutChips = chipGrid(pages.TRAITS, {"Golden", "Cursed", "Frozen", "Infernal"}, Color3.fromRGB(235, 215, 150), function(name, v)
+CFG.Mut[name] = v
+end)
 for _, m in ipairs(MUTATIONS) do
-toggle(m.name .. "  [" .. string.format("%.4f", m.chance * 100) .. "%]", false, function(v)
-CFG.Mut[m.name] = v
-end, 10, Color3.fromRGB(235, 215, 150))
+local row = Instance.new("TextLabel")
+row.Size = UDim2.new(1, 0, 0, 14)
+row.BackgroundTransparency = 1
+row.Font = Enum.Font.Code
+row.TextSize = 9
+row.TextXAlignment = Enum.TextXAlignment.Left
+row.TextColor3 = Color3.fromRGB(140, 145, 170)
+row.Text = "  " .. m.name .. " = " .. tostring(m.chance)
+row.LayoutOrder = nextOrder(pages.TRAITS)
+row.Parent = pages.TRAITS
 end
-
-local function buildPool(kind)
-header(string.upper(kind))
-for _, rar in ipairs(RARITY_ORDER) do
-local items = POOLS[kind][rar]
-if items then
-local children = {}
-toggle(rar, false, function(v)
-CFG.Rar[kind][rar] = v
-for _, c in ipairs(children) do
-c.api.Set(v, false)
-CFG.Want[kind][rar][c.name] = v
-c.api.SetVisible(v)
-end
-end, 0, RARITY_COLOR[rar])
-for _, item in ipairs(items) do
-local t = toggle(item, false, function(v)
-CFG.Want[kind][rar][item] = v
-end, 14, Color3.fromRGB(175, 180, 200))
-t.SetVisible(false)
-table.insert(children, {api = t, name = item})
-end
-end
-end
-end
-
-buildPool("Buildings")
-buildPool("Monsters")
 
 local spacer = Instance.new("Frame")
 spacer.Size = UDim2.new(1, 0, 0, 6)
 spacer.BackgroundTransparency = 1
 spacer.LayoutOrder = 9999
-spacer.Parent = scroll
+spacer.Parent = pages.MAIN
 
 local minimized = false
 mini.MouseButton1Click:Connect(function()
 minimized = not minimized
-scroll.Visible = not minimized
-TweenService:Create(main, TweenInfo.new(0.18), {Size = minimized and UDim2.fromOffset(300, 26) or UDim2.fromOffset(300, 390)}):Play()
+for _, p in pairs(pages) do p.Visible = not minimized and p.Name == activeTab end
+tabbar.Visible = not minimized
+if minimized then
+TS:Create(main, TweenInfo.new(0.15), {Size = UDim2.new(main.Size.X.Scale, main.Size.X.Offset, 0, 26)}):Play()
+else
+fit()
+end
 mini.Text = minimized and "+" or "-"
 end)
 
@@ -650,7 +784,7 @@ end)
 
 do
 local dragging, dragStart, startPos = false, nil, nil
-bar.InputBegan:Connect(function(i)
+main.InputBegan:Connect(function(i)
 if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
 dragging = true dragStart = i.Position startPos = main.Position
 end
