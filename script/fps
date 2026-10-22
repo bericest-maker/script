@@ -1,35 +1,38 @@
-local UIS=game:GetService("UserInputService")
-local setcap=setfpscap or set_fps_cap
-if not setcap then return warn("no setfpscap") end
-local P=(gethui and gethui()) or game:GetService("CoreGui")
-local old=P:FindFirstChild("FPSGui") if old then old:Destroy() end
-local g=Instance.new("ScreenGui") g.Name="FPSGui" g.ResetOnSpawn=false g.IgnoreGuiInset=true g.Parent=P
-local f=Instance.new("Frame") f.AnchorPoint=Vector2.new(.5,.5) f.Position=UDim2.fromScale(.5,.5)
-f.Size=UDim2.fromOffset(0,16) f.AutomaticSize=Enum.AutomaticSize.X f.Active=true
-f.BackgroundColor3=Color3.fromRGB(200,200,200) f.BorderColor3=Color3.fromRGB(90,90,90) f.BorderSizePixel=1 f.Parent=g
-local l=Instance.new("UIListLayout") l.FillDirection=Enum.FillDirection.Horizontal l.SortOrder=Enum.SortOrder.LayoutOrder l.Parent=f
-local sel
-for i,v in ipairs({3,5,10,60,0}) do
-  local b=Instance.new("TextButton") b.Size=UDim2.fromOffset(v==0 and 26 or 20,16) b.LayoutOrder=i
-  b.Text=v==0 and "OFF" or tostring(v) b.Font=Enum.Font.Code b.TextSize=10 b.TextColor3=Color3.new(0,0,0)
-  b.BackgroundColor3=f.BackgroundColor3 b.BorderSizePixel=0 b.AutoButtonColor=false b.Parent=f
-  b.Activated:Connect(function()
-    setcap(v==0 and 1e6 or v)
-    if sel then sel.BackgroundColor3=f.BackgroundColor3 end
-    sel=b b.BackgroundColor3=Color3.new(1,1,1)
-  end)
+local G=(getgenv and getgenv())or _G
+if G.__k then pcall(G.__k)end
+local R,U=game:GetService("RunService"),game:GetService("UserInputService")
+local C,i,t={3,5,10,30,60,0},G.__i or 6,os.clock()
+local cap,set=C[i],setfpscap or set_fps_cap
+local function apply(v)
+	cap,t=v,os.clock()
+	if set then pcall(set,v>0 and v or 0)if v<=0 then pcall(set,1e6)end end
 end
-local drag,ds,sp
-f.InputBegan:Connect(function(i)
-  if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
-    drag,ds,sp=true,i.Position,f.Position
-  end
+local spin=R.RenderStepped:Connect(function()
+	if cap>0 then local w=t+1/cap while os.clock()<w do end t=os.clock()end
 end)
-UIS.InputChanged:Connect(function(i)
-  if drag and (i.UserInputType==Enum.UserInputType.MouseMovement or i.UserInputType==Enum.UserInputType.Touch) then
-    local d=i.Position-ds f.Position=UDim2.new(sp.X.Scale,sp.X.Offset+d.X,sp.Y.Scale,sp.Y.Offset+d.Y)
-  end
+local sg=Instance.new("ScreenGui")
+sg.ResetOnSpawn,sg.IgnoreGuiInset,sg.DisplayOrder=false,true,9e8
+pcall(function()sg.Parent=gethui()end)
+if not sg.Parent then pcall(function()sg.Parent=game.CoreGui end)end
+if not sg.Parent then sg.Parent=game.Players.LocalPlayer:WaitForChild("PlayerGui")end
+local b=Instance.new("TextButton",sg)
+b.AutoButtonColor=false b.Font=Enum.Font.Code b.TextSize=10
+b.Size=UDim2.fromOffset(36,14)b.AnchorPoint=Vector2.new(.5,.5)b.Position=UDim2.fromScale(.5,.5)
+b.BackgroundColor3=Color3.fromRGB(200,200,200)b.BorderColor3=Color3.fromRGB(70,70,70)
+b.TextColor3=Color3.new()
+local function txt()b.Text=cap>0 and cap.."fps"or"off"end txt()
+local d,m,p,o
+local M,T,V=Enum.UserInputType.MouseButton1,Enum.UserInputType.Touch,Enum.UserInputType.MouseMovement
+b.InputBegan:Connect(function(x)if x.UserInputType==M or x.UserInputType==T then d,m,p,o=true,false,x.Position,b.Position end end)
+local a=U.InputChanged:Connect(function(x)
+	if not d or(x.UserInputType~=V and x.UserInputType~=T)then return end
+	local q=x.Position-p if q.Magnitude>4 then m=true end
+	b.Position=UDim2.new(o.X.Scale,o.X.Offset+q.X,o.Y.Scale,o.Y.Offset+q.Y)
 end)
-UIS.InputEnded:Connect(function(i)
-  if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then drag=false end
+local z=U.InputEnded:Connect(function(x)
+	if not d or(x.UserInputType~=M and x.UserInputType~=T)then return end
+	d=false if m then return end
+	i=i%#C+1 G.__i=i apply(C[i])txt()
 end)
+G.__k=function()spin:Disconnect()a:Disconnect()z:Disconnect()sg:Destroy()end
+apply(cap)
